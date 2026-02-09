@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Page - Automation Recorder</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #dc3545;
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"],
+        input[type="email"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 14px;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        .checkbox-group,
+        .radio-group {
+            margin: 10px 0;
+        }
+        .checkbox-group label,
+        .radio-group label {
+            display: inline;
+            margin-left: 5px;
+            font-weight: normal;
+        }
+        button {
+            background: #28a745;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #218838;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+            display: none;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Pagina di Test per Automation Recorder</h1>
+        
+        <div class="info">
+            <strong>Istruzioni:</strong> Usa questa pagina per testare l'estensione Chrome Automation Recorder.
+            Registra un'automazione compilando questo form!
+        </div>
+
+        <form id="testForm">
+            <div class="form-group">
+                <label for="nome">Nome Cliente *</label>
+                <input type="text" id="nome" name="nome" placeholder="Es. Mario Rossi" required>
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email *</label>
+                <input type="email" id="email" name="email" placeholder="mario.rossi@esempio.it" required>
+            </div>
+
+            <div class="form-group">
+                <label for="prodotto">Prodotto *</label>
+                <select id="prodotto" name="prodotto" required>
+                    <option value="">Seleziona un prodotto...</option>
+                    <option value="prodotto-a">Prodotto A - €100</option>
+                    <option value="prodotto-b">Prodotto B - €200</option>
+                    <option value="prodotto-c">Prodotto C - €300</option>
+                    <option value="prodotto-d">Prodotto D - €400</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="quantita">Quantità *</label>
+                <input type="text" id="quantita" name="quantita" placeholder="Es. 5" required>
+            </div>
+
+            <div class="form-group">
+                <label>Metodo di pagamento *</label>
+                <div class="radio-group">
+                    <input type="radio" id="carta" name="pagamento" value="carta" required>
+                    <label for="carta">Carta di credito</label>
+                </div>
+                <div class="radio-group">
+                    <input type="radio" id="bonifico" name="pagamento" value="bonifico">
+                    <label for="bonifico">Bonifico bancario</label>
+                </div>
+                <div class="radio-group">
+                    <input type="radio" id="contrassegno" name="pagamento" value="contrassegno">
+                    <label for="contrassegno">Contrassegno</label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="note">Note aggiuntive</label>
+                <textarea id="note" name="note" placeholder="Inserisci eventuali note..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="urgente" name="urgente">
+                    <label for="urgente">Ordine urgente</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="privacy" name="privacy" required>
+                    <label for="privacy">Accetto i termini e condizioni *</label>
+                </div>
+            </div>
+
+            <button type="submit">📦 Invia Ordine</button>
+        </form>
+
+        <div class="success" id="successMessage">
+            ✅ Ordine inviato con successo! L'automazione funziona correttamente.
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('testForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // Mostra messaggio di successo
+            document.getElementById('successMessage').style.display = 'block';
+            
+            // Raccogli i dati del form
+            const formData = new FormData(this);
+            console.log('Dati form inviati:');
+            for (let [key, value] of formData.entries()) {
+                console.log(`${key}: ${value}`);
+            }
+            
+            // Scroll al messaggio di successo
+            document.getElementById('successMessage').scrollIntoView({ behavior: 'smooth' });
+            
+            // Nascondi dopo 5 secondi
+            setTimeout(() => {
+                document.getElementById('successMessage').style.display = 'none';
+            }, 5000);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Web Automation Recorder</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 Automation Recorder</h1>
+    
+    <!-- URL corrente -->
+    <div class="current-url">
+      <span id="currentUrl">Caricamento...</span>
+    </div>
+
+    <!-- Controlli di registrazione -->
+    <div class="controls">
+      <button id="recordBtn" class="btn btn-record">
+        <span class="record-icon">⏺</span> REC
+      </button>
+      <button id="stopBtn" class="btn btn-stop" disabled>
+        <span>⏹</span> STOP
+      </button>
+      <button id="playBtn" class="btn btn-play" disabled>
+        <span>▶</span> PLAY
+      </button>
+    </div>
+
+    <!-- Salvataggio automazione -->
+    <div id="saveSection" class="save-section" style="display: none;">
+      <input type="text" id="automationName" placeholder="Nome automazione (es. Compilazione form ordini)">
+      <button id="saveBtn" class="btn btn-save">💾 Salva Automazione</button>
+      <button id="cancelBtn" class="btn btn-cancel">✖ Annulla</button>
+    </div>
+
+    <!-- Lista automazioni -->
+    <div class="automations-section">
+      <h2>Automazioni Salvate</h2>
+      <div id="automationsList" class="automations-list">
+        <p class="empty-message">Nessuna automazione registrata</p>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div id="status" class="status"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
