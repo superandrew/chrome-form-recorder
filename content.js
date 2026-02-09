@@ -200,7 +200,7 @@ function getUniqueSelector(element) {
       break;
     }
     
-    // Aggiungi nth-child se necessario
+    // Aggiungi nth-of-type se necessario (piu' stabile di nth-child con nodi di testo)
     let sibling = current;
     let nth = 1;
     while (sibling.previousElementSibling) {
@@ -211,7 +211,7 @@ function getUniqueSelector(element) {
     }
     
     if (nth > 1 || current.nextElementSibling) {
-      selector += `:nth-child(${nth})`;
+      selector += `:nth-of-type(${nth})`;
     }
     
     path.unshift(selector);
