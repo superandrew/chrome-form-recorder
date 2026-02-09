@@ -13,11 +13,27 @@ const cancelBtn = document.getElementById('cancelBtn');
 const automationsList = document.getElementById('automationsList');
 const status = document.getElementById('status');
 const currentUrl = document.getElementById('currentUrl');
+const buildVersion = document.getElementById('buildVersion');
+const stateLabel = document.getElementById('stateLabel');
+const automationCount = document.getElementById('automationCount');
+const container = document.querySelector('.container');
+
+const STATE_LABELS = {
+  idle: 'Idle',
+  recording: 'Recording',
+  saved: 'Saved',
+  playing: 'Playing',
+  error: 'Errore'
+};
 
 // Inizializzazione
 chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
   currentTab = tabs[0];
   currentUrl.textContent = currentTab.url;
+  const manifest = chrome.runtime.getManifest();
+  if (buildVersion && manifest && manifest.version) {
+    buildVersion.textContent = `v${manifest.version}`;
+  }
   
   // Recupera lo stato della registrazione dal background
   chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {
@@ -30,7 +46,10 @@ chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
       recordBtn.classList.add('recording');
       stopBtn.disabled = false;
       
+      setUiState('recording');
       showStatus(`🔴 Registrazione in corso... (${recordedActions.length} azioni)`, 'info');
+    } else {
+      setUiState('idle');
     }
   });
   
@@ -63,6 +82,7 @@ async function startRecording() {
   recordBtn.classList.add('recording');
   stopBtn.disabled = false;
   playBtn.disabled = true;
+  setUiState('recording');
   
   // Invia messaggio al content script per iniziare la registrazione
   chrome.tabs.sendMessage(currentTab.id, { action: 'startRecording' });
@@ -98,8 +118,10 @@ function stopRecording() {
     if (recordedActions.length > 0) {
       playBtn.disabled = false;
       saveSection.style.display = 'block';
+      setUiState('saved');
       showStatus(`✓ Registrate ${recordedActions.length} azioni`, 'success');
     } else {
+      setUiState('idle');
       showStatus('Nessuna azione registrata', 'error');
     }
   });
@@ -113,6 +135,7 @@ async function playLastRecording() {
   }
   
   playBtn.disabled = true;
+  setUiState('playing');
   showStatus('▶ Riproduzione in corso...', 'info');
   
   chrome.tabs.sendMessage(currentTab.id, {
@@ -121,8 +144,10 @@ async function playLastRecording() {
   }, (response) => {
     playBtn.disabled = false;
     if (response && response.success) {
+      setUiState('idle');
       showStatus('✓ Automazione completata', 'success');
     } else {
+      setUiState('error');
       showStatus('✗ Errore durante la riproduzione', 'error');
     }
   });
@@ -161,6 +186,7 @@ async function saveAutomation() {
       saveSection.style.display = 'none';
       recordedActions = [];
       playBtn.disabled = true;
+      setUiState('idle');
       loadAutomations();
     });
   });
@@ -172,12 +198,17 @@ function cancelSave() {
   saveSection.style.display = 'none';
   recordedActions = [];
   playBtn.disabled = true;
+  setUiState('idle');
 }
 
 // Carica automazioni salvate
 function loadAutomations() {
   chrome.storage.local.get(['automations'], (result) => {
     const automations = result.automations || [];
+    
+    if (automationCount) {
+      automationCount.textContent = automations.length.toString();
+    }
     
     if (automations.length === 0) {
       automationsList.innerHTML = '<p class="empty-message">Nessuna automazione registrata</p>';
@@ -233,14 +264,17 @@ function createAutomationItem(automation) {
 // Esegui automazione salvata
 async function runAutomation(automation) {
   showStatus('▶ Esecuzione automazione...', 'info');
+  setUiState('playing');
   
   chrome.tabs.sendMessage(currentTab.id, {
     action: 'playRecording',
     actions: automation.actions
   }, (response) => {
     if (response && response.success) {
+      setUiState('idle');
       showStatus(`✓ "${automation.name}" completata`, 'success');
     } else {
+      setUiState('error');
       showStatus('✗ Errore durante l\'esecuzione', 'error');
     }
   });
@@ -269,7 +303,22 @@ function showStatus(message, type) {
   status.className = `status ${type}`;
   status.style.display = 'block';
   
+  if (type === 'error') {
+    setUiState('error');
+  }
+  
   setTimeout(() => {
     status.style.display = 'none';
   }, 3000);
+}
+
+function setUiState(state) {
+  if (!container) return;
+  container.classList.remove('state-idle', 'state-recording', 'state-saved', 'state-playing', 'state-error');
+  container.classList.add(`state-${state}`);
+  container.dataset.state = state;
+  
+  if (stateLabel && STATE_LABELS[state]) {
+    stateLabel.textContent = STATE_LABELS[state];
+  }
 }

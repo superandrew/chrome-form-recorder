@@ -6,8 +6,14 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="container">
-    <h1>🤖 Automation Recorder</h1>
+  <div class="container state-idle" data-state="idle">
+    <header class="header">
+      <div class="status-dot" aria-hidden="true"></div>
+      <div class="header-text">
+        <h1>Automation Recorder <span id="buildVersion" class="build-version"></span></h1>
+        <span id="stateLabel" class="state-label">Idle</span>
+      </div>
+    </header>
     
     <!-- URL corrente -->
     <div class="current-url">
@@ -16,27 +22,35 @@
 
     <!-- Controlli di registrazione -->
     <div class="controls">
-      <button id="recordBtn" class="btn btn-record">
-        <span class="record-icon">⏺</span> REC
+      <button id="recordBtn" class="btn btn-circle btn-record" aria-pressed="false">
+        <span class="icon-dot" aria-hidden="true"></span>
+        <span class="btn-label">REC</span>
       </button>
-      <button id="stopBtn" class="btn btn-stop" disabled>
-        <span>⏹</span> STOP
+      <button id="stopBtn" class="btn btn-circle btn-stop" disabled>
+        <span class="icon-stop" aria-hidden="true"></span>
+        <span class="btn-label">STOP</span>
       </button>
-      <button id="playBtn" class="btn btn-play" disabled>
-        <span>▶</span> PLAY
+      <button id="playBtn" class="btn btn-circle btn-play" disabled aria-pressed="false">
+        <span class="icon-play" aria-hidden="true"></span>
+        <span class="btn-label">PLAY</span>
       </button>
     </div>
 
     <!-- Salvataggio automazione -->
     <div id="saveSection" class="save-section" style="display: none;">
       <input type="text" id="automationName" placeholder="Nome automazione (es. Compilazione form ordini)">
-      <button id="saveBtn" class="btn btn-save">💾 Salva Automazione</button>
-      <button id="cancelBtn" class="btn btn-cancel">✖ Annulla</button>
+      <div class="save-actions">
+        <button id="saveBtn" class="btn btn-save">Salva automazione</button>
+        <button id="cancelBtn" class="btn btn-ghost">Annulla</button>
+      </div>
     </div>
 
     <!-- Lista automazioni -->
     <div class="automations-section">
-      <h2>Automazioni Salvate</h2>
+      <div class="section-title">
+        <h2>Automazioni salvate</h2>
+        <span id="automationCount" class="badge">0</span>
+      </div>
       <div id="automationsList" class="automations-list">
         <p class="empty-message">Nessuna automazione registrata</p>
       </div>
@@ -44,6 +58,15 @@
 
     <!-- Status -->
     <div id="status" class="status"></div>
+
+    <footer class="footer">
+      <button class="icon-btn" type="button" aria-label="Impostazioni">
+        ⚙️
+      </button>
+      <button class="icon-btn icon-btn-danger" type="button" aria-label="Elimina">
+        🗑️
+      </button>
+    </footer>
   </div>
 
   <script src="popup.js"></script>
