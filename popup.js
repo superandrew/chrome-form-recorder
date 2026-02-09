@@ -13,11 +13,16 @@ const cancelBtn = document.getElementById('cancelBtn');
 const automationsList = document.getElementById('automationsList');
 const status = document.getElementById('status');
 const currentUrl = document.getElementById('currentUrl');
+const buildVersion = document.getElementById('buildVersion');
 
 // Inizializzazione
 chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
   currentTab = tabs[0];
   currentUrl.textContent = currentTab.url;
+  const manifest = chrome.runtime.getManifest();
+  if (buildVersion && manifest && manifest.version) {
+    buildVersion.textContent = `v${manifest.version}`;
+  }
   
   // Recupera lo stato della registrazione dal background
   chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {

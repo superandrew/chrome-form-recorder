@@ -1,4 +1,5 @@
 let isRecording = false;
+let lastPointerDown = null;
 
 // Listener per messaggi dal popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -25,6 +26,8 @@ function startRecording() {
   
   // Aggiungi event listeners
   document.addEventListener('click', handleClick, true);
+  document.addEventListener('pointerdown', handlePointerDown, true);
+  document.addEventListener('keydown', handleKeydown, true);
   document.addEventListener('input', handleInput, true);
   document.addEventListener('change', handleChange, true);
   document.addEventListener('submit', handleSubmit, true);
@@ -38,6 +41,8 @@ function stopRecording() {
   
   // Rimuovi event listeners
   document.removeEventListener('click', handleClick, true);
+  document.removeEventListener('pointerdown', handlePointerDown, true);
+  document.removeEventListener('keydown', handleKeydown, true);
   document.removeEventListener('input', handleInput, true);
   document.removeEventListener('change', handleChange, true);
   document.removeEventListener('submit', handleSubmit, true);
@@ -49,11 +54,16 @@ function stopRecording() {
 function handleClick(event) {
   if (!isRecording) return;
   
-  const target = event.target;
-  const selector = getUniqueSelector(target);
+  const target = getEventTarget(event);
+  if (!target) return;
+  const selector = getDeepSelector(target);
   
   // Ignora click su elementi dell'estensione
   if (target.closest('[data-automation-recorder]')) {
+    return;
+  }
+  
+  if (shouldSkipClick(selector)) {
     return;
   }
   
@@ -61,17 +71,67 @@ function handleClick(event) {
     type: 'click',
     selector: selector,
     tagName: target.tagName,
-    text: target.textContent.substring(0, 50),
+    text: (target.textContent || '').substring(0, 50),
     timestamp: Date.now()
   };
   
   // Invia al background
-  chrome.runtime.sendMessage({
-    action: 'addAction',
-    actionData: action
-  });
+  recordAction(action);
   
   console.log('Click registrato:', action);
+}
+
+function handlePointerDown(event) {
+  if (!isRecording) return;
+  
+  const target = getEventTarget(event);
+  if (!target) return;
+  
+  if (target.closest('[data-automation-recorder]')) {
+    return;
+  }
+  
+  const selector = getDeepSelector(target);
+  lastPointerDown = { selector, timestamp: Date.now() };
+  
+  const action = {
+    type: 'pointerdown',
+    selector: selector,
+    tagName: target.tagName,
+    text: (target.textContent || '').substring(0, 50),
+    timestamp: Date.now()
+  };
+  
+  recordAction(action);
+  console.log('Pointerdown registrato:', action);
+}
+
+function handleKeydown(event) {
+  if (!isRecording) return;
+  
+  if (event.key !== 'Enter' && event.key !== ' ') {
+    return;
+  }
+  
+  const target = getEventTarget(event);
+  if (!target) return;
+  
+  if (target.closest('[data-automation-recorder]')) {
+    return;
+  }
+  
+  const selector = getDeepSelector(target);
+  
+  const action = {
+    type: 'keydown',
+    selector: selector,
+    key: event.key,
+    tagName: target.tagName,
+    timestamp: Date.now()
+  };
+  
+  recordAction(action);
+  console.log('Keydown registrato:', action);
 }
 
 // Gestisce input
@@ -79,8 +139,9 @@ let lastInputAction = null;
 function handleInput(event) {
   if (!isRecording) return;
   
-  const target = event.target;
-  const selector = getUniqueSelector(target);
+  const target = getEventTarget(event);
+  if (!target) return;
+  const selector = getDeepSelector(target);
   
   const action = {
     type: 'input',
@@ -98,10 +159,7 @@ function handleInput(event) {
     // Invia al background dopo un breve delay per evitare troppi messaggi
     setTimeout(() => {
       if (lastInputAction && lastInputAction.selector === selector) {
-        chrome.runtime.sendMessage({
-          action: 'addAction',
-          actionData: lastInputAction
-        });
+        recordAction(lastInputAction);
         console.log('Input registrato:', lastInputAction);
         lastInputAction = null;
       }
@@ -113,8 +171,9 @@ function handleInput(event) {
 function handleChange(event) {
   if (!isRecording) return;
   
-  const target = event.target;
-  const selector = getUniqueSelector(target);
+  const target = getEventTarget(event);
+  if (!target) return;
+  const selector = getDeepSelector(target);
   
   let value;
   if (target.type === 'checkbox' || target.type === 'radio') {
@@ -135,10 +194,7 @@ function handleChange(event) {
   };
   
   // Invia al background
-  chrome.runtime.sendMessage({
-    action: 'addAction',
-    actionData: action
-  });
+  recordAction(action);
   
   console.log('Change registrato:', action);
 }
@@ -147,8 +203,9 @@ function handleChange(event) {
 function handleSubmit(event) {
   if (!isRecording) return;
   
-  const target = event.target;
-  const selector = getUniqueSelector(target);
+  const target = getEventTarget(event);
+  if (!target) return;
+  const selector = getDeepSelector(target);
   
   const action = {
     type: 'submit',
@@ -157,16 +214,64 @@ function handleSubmit(event) {
   };
   
   // Invia al background
-  chrome.runtime.sendMessage({
-    action: 'addAction',
-    actionData: action
-  });
+  recordAction(action);
   
   console.log('Submit registrato:', action);
 }
 
+function getEventTarget(event) {
+  if (event.composedPath) {
+    const path = event.composedPath();
+    const element = path.find(node => node && node.nodeType === Node.ELEMENT_NODE);
+    if (element) {
+      return element;
+    }
+  }
+  return event.target && event.target.nodeType === Node.ELEMENT_NODE ? event.target : null;
+}
+
+function shouldSkipClick(selector) {
+  if (!lastPointerDown) return false;
+  const timeDiff = Date.now() - lastPointerDown.timestamp;
+  if (timeDiff > 500) {
+    lastPointerDown = null;
+    return false;
+  }
+  const shouldSkip = lastPointerDown.selector === selector;
+  if (shouldSkip) {
+    lastPointerDown = null;
+  }
+  return shouldSkip;
+}
+
+function recordAction(action) {
+  chrome.runtime.sendMessage({
+    action: 'addAction',
+    actionData: action
+  });
+}
+
+function getDeepSelector(element) {
+  const parts = [];
+  let current = element;
+  
+  while (current) {
+    const root = current.getRootNode();
+    const selector = getUniqueSelector(current, root);
+    parts.unshift(selector);
+    
+    if (root instanceof ShadowRoot) {
+      current = root.host;
+    } else {
+      break;
+    }
+  }
+  
+  return parts.join(' >>> ');
+}
+
 // Genera un selettore unico per l'elemento
-function getUniqueSelector(element) {
+function getUniqueSelector(element, root = document) {
   // Prova con ID
   if (element.id) {
     return `#${element.id}`;
@@ -182,13 +287,13 @@ function getUniqueSelector(element) {
     const classes = element.className.trim().split(/\s+/).join('.');
     if (classes) {
       const selector = `${element.tagName.toLowerCase()}.${classes}`;
-      if (document.querySelectorAll(selector).length === 1) {
+      if (root.querySelectorAll(selector).length === 1) {
         return selector;
       }
     }
   }
   
-  // Usa nth-child come fallback
+  // Usa nth-of-type come fallback
   let path = [];
   let current = element;
   
@@ -200,7 +305,7 @@ function getUniqueSelector(element) {
       break;
     }
     
-    // Aggiungi nth-child se necessario
+    // Aggiungi nth-of-type se necessario (piu' stabile di nth-child con nodi di testo)
     let sibling = current;
     let nth = 1;
     while (sibling.previousElementSibling) {
@@ -211,7 +316,7 @@ function getUniqueSelector(element) {
     }
     
     if (nth > 1 || current.nextElementSibling) {
-      selector += `:nth-child(${nth})`;
+      selector += `:nth-of-type(${nth})`;
     }
     
     path.unshift(selector);
@@ -247,7 +352,7 @@ async function playRecording(actions) {
 
 // Esegue una singola azione
 async function executeAction(action) {
-  const element = document.querySelector(action.selector);
+  const element = querySelectorDeep(action.selector);
   
   if (!element) {
     throw new Error(`Elemento non trovato: ${action.selector}`);
@@ -260,6 +365,19 @@ async function executeAction(action) {
   switch (action.type) {
     case 'click':
       element.click();
+      break;
+      
+    case 'pointerdown':
+      element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+      element.click();
+      break;
+      
+    case 'keydown':
+      element.dispatchEvent(new KeyboardEvent('keydown', { key: action.key, bubbles: true }));
+      if (action.key === 'Enter' || action.key === ' ') {
+        element.click();
+      }
       break;
       
     case 'input':
@@ -285,6 +403,28 @@ async function executeAction(action) {
     default:
       console.warn('Tipo di azione non riconosciuto:', action.type);
   }
+}
+
+function querySelectorDeep(selector) {
+  const parts = selector.split(' >>> ');
+  let root = document;
+  let element = null;
+  
+  for (let index = 0; index < parts.length; index++) {
+    element = root.querySelector(parts[index]);
+    if (!element) {
+      return null;
+    }
+    
+    if (index < parts.length - 1) {
+      root = element.shadowRoot;
+      if (!root) {
+        return null;
+      }
+    }
+  }
+  
+  return element;
 }
 
 // Utility: sleep
