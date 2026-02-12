@@ -36,6 +36,24 @@
       </button>
     </div>
 
+    <div class="settings-row">
+      <label class="toggle-label" for="verboseLogsToggle">
+        <input type="checkbox" id="verboseLogsToggle">
+        <span>Verbose logs</span>
+      </label>
+    </div>
+    <div class="settings-row settings-row-inline">
+      <label class="toggle-label" for="smartWaitToggle">
+        <input type="checkbox" id="smartWaitToggle">
+        <span>Smart wait</span>
+      </label>
+      <label class="timeout-label" for="actionTimeoutMs">
+        Timeout
+        <input type="number" id="actionTimeoutMs" min="1000" max="30000" step="500" value="8000">
+        ms
+      </label>
+    </div>
+
     <!-- Salvataggio automazione -->
     <div id="saveSection" class="save-section" style="display: none;">
       <input type="text" id="automationName" placeholder="Nome automazione (es. Compilazione form ordini)">

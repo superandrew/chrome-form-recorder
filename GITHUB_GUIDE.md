@@ -38,7 +38,7 @@ git init
 git add .
 
 # Crea il primo commit
-git commit -m "Initial commit: Chrome Automation Recorder v1.0"
+git commit -m "Initial commit: Chrome Automation Recorder v1.2"
 
 # Collega al repository GitHub (sostituisci TUO-USERNAME con il tuo username)
 git remote add origin https://github.com/TUO-USERNAME/chrome-automation-recorder.git
@@ -94,7 +94,7 @@ git add .
 git status
 
 # 5. Crea il primo commit
-git commit -m "Initial commit: Chrome Automation Recorder v1.0"
+git commit -m "Initial commit: Chrome Automation Recorder v1.2"
 
 # 6. Crea il repository su GitHub (vai su github.com e crealo come spiegato sopra)
 
@@ -141,12 +141,12 @@ git commit -m "Style: Migliorato design del popup"
 
 ## 🏷️ Creare una release/versione
 
-Per creare una versione ufficiale (es. v1.0):
+Per creare una versione ufficiale (es. v1.2.0):
 
 1. Vai sul tuo repository GitHub
 2. Clicca su **"Releases"** → **"Create a new release"**
-3. Clicca **"Choose a tag"** e scrivi `v1.0`
-4. **Release title**: `Version 1.0 - Initial Release`
+3. Clicca **"Choose a tag"** e scrivi `v1.2.0`
+4. **Release title**: `Version 1.2.0 - Smart Replay & Diagnostics`
 5. **Description**: Descrivi le funzionalità principali
 6. Opzionale: Carica un file ZIP dell'estensione
 7. Clicca **"Publish release"**
@@ -187,7 +187,8 @@ Prima di pubblicare, modifica il file `README.md` e sostituisci:
 - [ ] Hai aggiunto screenshot (opzionale ma consigliato)
 - [ ] Hai verificato che `.gitignore` sia presente
 - [ ] Il file `LICENSE` è presente
-- [ ] La versione nel `manifest.json` è corretta
+- [ ] La versione nel `manifest.json` è corretta (attuale: `1.2`)
+- [ ] In popup è visibile `v1.2 • c:...` su una pagina `https://`
 
 ---
 

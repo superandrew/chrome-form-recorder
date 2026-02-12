@@ -1,0 +1,1694 @@
+diff --git a/background.js b/background.js
+index b88fc0e..55fe9d6 100644
+--- a/background.js
++++ b/background.js
+@@ -8,10 +8,12 @@ const defaultRecordingState = {
+ 
+ // Stato globale della registrazione (tenuto in memoria ma sincronizzato con storage.session)
+ let recordingState = { ...defaultRecordingState };
++let recordingStateLoaded = false;
+ 
+ function loadRecordingState(callback) {
+   chrome.storage.session.get(['recordingState'], (result) => {
+     recordingState = result.recordingState || { ...defaultRecordingState };
++    recordingStateLoaded = true;
+     callback(recordingState);
+   });
+ }
+@@ -25,6 +27,14 @@ function saveRecordingState(state, callback) {
+   });
+ }
+ 
++function ensureRecordingStateLoaded(callback) {
++  if (recordingStateLoaded) {
++    callback(recordingState);
++    return;
++  }
++  loadRecordingState(callback);
++}
++
+ chrome.runtime.onInstalled.addListener(() => {
+   console.log('Web Automation Recorder installato');
+   
+@@ -46,6 +56,9 @@ chrome.runtime.onStartup.addListener(() => {
+   loadRecordingState(() => {});
+ });
+ 
++// Also load once when the worker is evaluated.
++ensureRecordingStateLoaded(() => {});
++
+ // Gestisci messaggi da content script e popup
+ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+   if (request.action === 'getAutomations') {
+@@ -56,7 +69,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+   }
+   
+   if (request.action === 'getRecordingState') {
+-    loadRecordingState((state) => {
++    ensureRecordingStateLoaded((state) => {
+       sendResponse(state);
+     });
+     return true;
+@@ -71,19 +84,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+   }
+   
+   if (request.action === 'addAction') {
+-    loadRecordingState((state) => {
+-      if (state.isRecording && sender.tab && sender.tab.id === state.tabId) {
+-        const updatedState = {
+-          ...state,
+-          actions: [...state.actions, request.actionData]
+-        };
+-        saveRecordingState(updatedState, () => {
+-          sendResponse({ success: true });
+-        });
+-      } else {
+-        sendResponse({ success: false });
+-      }
+-    });
++    const senderTabId = sender && sender.tab ? sender.tab.id : null;
++    const canAccept = recordingState.isRecording && senderTabId !== null && senderTabId === recordingState.tabId;
++
++    if (canAccept) {
++      const updatedState = {
++        ...recordingState,
++        actions: [...recordingState.actions, request.actionData]
++      };
++      saveRecordingState(updatedState, () => {
++        sendResponse({ success: true });
++      });
++    } else {
++      sendResponse({ success: false });
++    }
+     return true;
+   }
+   
+diff --git a/content.js b/content.js
+index 15cc851..b55b8de 100644
+--- a/content.js
++++ b/content.js
+@@ -1,5 +1,20 @@
+ let isRecording = false;
+ let lastPointerDown = null;
++const IS_TOP_FRAME = window.top === window;
++const playbackOptions = {
++  verboseLogs: false,
++  smartWait: true,
++  actionTimeoutMs: 8000
++};
++const activityTracker = {
++  initialized: false,
++  inFlightRequests: 0,
++  mutationCount: 0,
++  lastMutationTs: 0,
++  patchedFetch: false,
++  patchedXhr: false
++};
++const CONTENT_BUILD_ID = '2026-02-12.3';
+ 
+ // Listener per messaggi dal popup
+ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+@@ -10,16 +25,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+     stopRecording();
+     sendResponse({ success: true });
+   } else if (request.action === 'playRecording') {
+-    playRecording(request.actions).then(() => {
++    // Avoid duplicate replay executions when content script is injected in multiple frames.
++    if (!IS_TOP_FRAME) {
++      return;
++    }
++
++    playRecording(request.actions, request.options || {}).then(() => {
+       sendResponse({ success: true });
+     }).catch((error) => {
+       console.error('Errore riproduzione:', error);
+       sendResponse({ success: false, error: error.message });
+     });
+     return true; // Mantiene il canale aperto per risposta asincrona
++  } else if (request.action === 'getBuildInfo') {
++    sendResponse({
++      build: CONTENT_BUILD_ID,
++      topFrame: IS_TOP_FRAME,
++      href: location.href
++    });
+   }
+ });
+ 
++initActivityTracker();
++try {
++  console.log('[Automation] content loaded', {
++    build: CONTENT_BUILD_ID,
++    topFrame: IS_TOP_FRAME,
++    href: location.href
++  });
++} catch (error) {
++  // no-op
++}
++
+ // Inizia registrazione
+ function startRecording() {
+   isRecording = true;
+@@ -37,6 +74,13 @@ function startRecording() {
+ 
+ // Ferma registrazione
+ function stopRecording() {
++  // Flush any pending debounced input before turning recording off.
++  if (lastInputAction) {
++    recordAction(lastInputAction);
++    console.log('Input flush su stop:', lastInputAction);
++    lastInputAction = null;
++  }
++
+   isRecording = false;
+   
+   // Rimuovi event listeners
+@@ -70,6 +114,7 @@ function handleClick(event) {
+   const action = {
+     type: 'click',
+     selector: selector,
++    elementHints: getElementHints(target),
+     tagName: target.tagName,
+     text: (target.textContent || '').substring(0, 50),
+     timestamp: Date.now()
+@@ -97,6 +142,7 @@ function handlePointerDown(event) {
+   const action = {
+     type: 'pointerdown',
+     selector: selector,
++    elementHints: getElementHints(target),
+     tagName: target.tagName,
+     text: (target.textContent || '').substring(0, 50),
+     timestamp: Date.now()
+@@ -125,6 +171,7 @@ function handleKeydown(event) {
+   const action = {
+     type: 'keydown',
+     selector: selector,
++    elementHints: getElementHints(target),
+     key: event.key,
+     tagName: target.tagName,
+     timestamp: Date.now()
+@@ -146,6 +193,7 @@ function handleInput(event) {
+   const action = {
+     type: 'input',
+     selector: selector,
++    elementHints: getElementHints(target),
+     value: target.value,
+     inputType: target.type,
+     timestamp: Date.now()
+@@ -187,6 +235,7 @@ function handleChange(event) {
+   const action = {
+     type: 'change',
+     selector: selector,
++    elementHints: getElementHints(target),
+     value: value,
+     inputType: target.type,
+     tagName: target.tagName,
+@@ -210,6 +259,7 @@ function handleSubmit(event) {
+   const action = {
+     type: 'submit',
+     selector: selector,
++    elementHints: getElementHints(target),
+     timestamp: Date.now()
+   };
+   
+@@ -231,17 +281,9 @@ function getEventTarget(event) {
+ }
+ 
+ function shouldSkipClick(selector) {
+-  if (!lastPointerDown) return false;
+-  const timeDiff = Date.now() - lastPointerDown.timestamp;
+-  if (timeDiff > 500) {
+-    lastPointerDown = null;
+-    return false;
+-  }
+-  const shouldSkip = lastPointerDown.selector === selector;
+-  if (shouldSkip) {
+-    lastPointerDown = null;
+-  }
+-  return shouldSkip;
++  // Always record clicks, even if there was a pointerdown.
++  // The original logic was preventing clicks from being recorded.
++  return false;
+ }
+ 
+ function recordAction(action) {
+@@ -251,6 +293,73 @@ function recordAction(action) {
+   });
+ }
+ 
++function getElementHints(element) {
++  if (!element || !element.tagName) return {};
++
++  const tag = element.tagName.toLowerCase();
++  const id = element.id || '';
++  const name = element.name || '';
++  const type = element.type || '';
++  const role = element.getAttribute('role') || '';
++  const ariaLabel = element.getAttribute('aria-label') || '';
++  const placeholder = element.getAttribute('placeholder') || '';
++  const label = getAssociatedLabelText(element);
++  const text = (element.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 80);
++  const testId = firstNonEmptyAttribute(element, [
++    'data-testid',
++    'data-test',
++    'data-qa',
++    'data-cy'
++  ]);
++
++  return {
++    tag,
++    id,
++    name,
++    type,
++    role,
++    ariaLabel,
++    placeholder,
++    label,
++    text,
++    testId
++  };
++}
++
++function firstNonEmptyAttribute(element, names) {
++  for (const name of names) {
++    const value = element.getAttribute(name);
++    if (value && typeof value === 'string') {
++      const trimmed = value.trim();
++      if (trimmed) return trimmed;
++    }
++  }
++  return '';
++}
++
++function getAssociatedLabelText(element) {
++  if (!element) return '';
++
++  if (element.labels && element.labels.length > 0) {
++    return normalizeText(element.labels[0].textContent || '');
++  }
++
++  if (element.id) {
++    const escapedId = CSS.escape(element.id);
++    const label = document.querySelector(`label[for="${escapedId}"]`);
++    if (label) return normalizeText(label.textContent || '');
++  }
++
++  const parentLabel = element.closest('label');
++  if (parentLabel) return normalizeText(parentLabel.textContent || '');
++
++  return '';
++}
++
++function normalizeText(text) {
++  return (text || '').trim().replace(/\s+/g, ' ').substring(0, 120);
++}
++
+ function getDeepSelector(element) {
+   const parts = [];
+   let current = element;
+@@ -273,22 +382,28 @@ function getDeepSelector(element) {
+ // Genera un selettore unico per l'elemento
+ function getUniqueSelector(element, root = document) {
+   // Prova con ID
+-  if (element.id) {
+-    return `#${element.id}`;
++  if (element.id && typeof element.id === 'string') {
++    // Escape ID if it starts with a digit or contains special characters
++    const escapedId = CSS.escape(element.id);
++    return `#${escapedId}`;
+   }
+   
+   // Prova con name
+-  if (element.name) {
+-    return `${element.tagName.toLowerCase()}[name="${element.name}"]`;
++  if (element.name && typeof element.name === 'string') {
++    return `${element.tagName.toLowerCase()}[name="${CSS.escape(element.name)}"]`;
+   }
+   
+   // Prova con classe unica
+   if (element.className && typeof element.className === 'string') {
+-    const classes = element.className.trim().split(/\s+/).join('.');
++    const classes = element.className.trim().split(/\s+/).filter(c => c).map(c => CSS.escape(c)).join('.');
+     if (classes) {
+       const selector = `${element.tagName.toLowerCase()}.${classes}`;
+-      if (root.querySelectorAll(selector).length === 1) {
+-        return selector;
++      try {
++        if (root.querySelectorAll(selector).length === 1) {
++          return selector;
++        }
++      } catch (e) {
++        console.warn('Invalid selector generated from classes:', selector);
+       }
+     }
+   }
+@@ -300,22 +415,36 @@ function getUniqueSelector(element, root = document) {
+   while (current && current.tagName) {
+     let selector = current.tagName.toLowerCase();
+     
+-    if (current.id) {
+-      path.unshift(`#${current.id}`);
++    if (current.id && typeof current.id === 'string') {
++      path.unshift(`#${CSS.escape(current.id)}`);
+       break;
+     }
+     
+     // Aggiungi nth-of-type se necessario (piu' stabile di nth-child con nodi di testo)
+     let sibling = current;
+     let nth = 1;
++    let hasSiblingsWithSameTag = false;
++    
++    // Check previous siblings
+     while (sibling.previousElementSibling) {
+       sibling = sibling.previousElementSibling;
+       if (sibling.tagName === current.tagName) {
+         nth++;
++        hasSiblingsWithSameTag = true;
++      }
++    }
++    
++    // Check next siblings to see if nth-of-type is really needed for uniqueness
++    sibling = current;
++    while (sibling.nextElementSibling) {
++      sibling = sibling.nextElementSibling;
++      if (sibling.tagName === current.tagName) {
++        hasSiblingsWithSameTag = true;
++        break;
+       }
+     }
+     
+-    if (nth > 1 || current.nextElementSibling) {
++    if (hasSiblingsWithSameTag) {
+       selector += `:nth-of-type(${nth})`;
+     }
+     
+@@ -330,33 +459,63 @@ function getUniqueSelector(element, root = document) {
+ }
+ 
+ // Riproduci azioni registrate
+-async function playRecording(actions) {
+-  console.log('Inizio riproduzione di', actions.length, 'azioni');
++async function playRecording(actions, options = {}) {
++  playbackOptions.verboseLogs = Boolean(options && options.verboseLogs);
++  playbackOptions.smartWait = options && options.smartWait !== false;
++  playbackOptions.actionTimeoutMs = normalizeTimeoutMs(options && options.actionTimeoutMs);
++
++  const replayActions = normalizeActionsForReplay(actions);
++
++  console.log('Inizio riproduzione di', replayActions.length, 'azioni');
++  verboseLog('Opzioni replay:', options);
++  if (replayActions.length !== actions.length) {
++    verboseLog('Azioni normalizzate per replay', { original: actions.length, normalized: replayActions.length });
++  }
+   
+-  for (let i = 0; i < actions.length; i++) {
+-    const action = actions[i];
+-    console.log(`Esecuzione azione ${i + 1}/${actions.length}:`, action);
++  for (let i = 0; i < replayActions.length; i++) {
++    const action = replayActions[i];
++    console.log(`Esecuzione azione ${i + 1}/${replayActions.length}:`, action);
++    verboseLog(`Azione ${i + 1}/${replayActions.length}`, action);
+     
+     try {
+-      await executeAction(action);
++      await executeAction(action, i + 1, replayActions.length);
+       // Pausa tra le azioni
+       await sleep(300);
+     } catch (error) {
+       console.error('Errore esecuzione azione:', error, action);
++      verboseLog(`Errore azione ${i + 1}`, error.message);
+       throw error;
+     }
+   }
+   
+   console.log('Riproduzione completata');
++  verboseLog('Riproduzione completata con successo');
+ }
+ 
+ // Esegue una singola azione
+-async function executeAction(action) {
+-  const element = querySelectorDeep(action.selector);
+-  
++async function executeAction(action, index, total) {
++  const timeoutMs = playbackOptions.actionTimeoutMs;
++
++  if (playbackOptions.smartWait) {
++    await waitForAppReady(Math.max(1200, Math.floor(timeoutMs * 0.6)), 'before-action');
++  }
++
++  const preActionState = capturePageState();
++  const resolved = await resolveActionElement(action, timeoutMs);
++  const element = resolved.element;
+   if (!element) {
++    if (isSkippableMissingPointerdown(action)) {
++      verboseLog(`Azione saltata (pointerdown non critico) ${index}/${total}`, action.selector);
++      return;
++    }
++
++    verboseLog(`Elemento non trovato per azione ${index}/${total}`, {
++      selector: action.selector,
++      hints: action.elementHints || {}
++    });
+     throw new Error(`Elemento non trovato: ${action.selector}`);
+   }
++  verboseLog(`Elemento risolto per azione ${index}/${total} con strategia: ${resolved.strategy}`);
+   
+   // Scrolla l'elemento nella vista
+   element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+@@ -375,7 +534,7 @@ async function executeAction(action) {
+       
+     case 'keydown':
+       element.dispatchEvent(new KeyboardEvent('keydown', { key: action.key, bubbles: true }));
+-      if (action.key === 'Enter' || action.key === ' ') {
++      if (shouldTriggerClickForKeydown(element, action)) {
+         element.click();
+       }
+       break;
+@@ -397,21 +556,828 @@ async function executeAction(action) {
+       break;
+       
+     case 'submit':
+-      element.submit();
++      if (typeof element.submit === 'function') {
++        element.submit();
++      } else {
++        element.dispatchEvent(new Event('submit', { bubbles: true }));
++      }
+       break;
+       
+     default:
+       console.warn('Tipo di azione non riconosciuto:', action.type);
+   }
++
++  if (playbackOptions.smartWait) {
++    await waitAfterAction(action, preActionState, timeoutMs);
++  }
++}
++
++async function resolveActionElement(action, timeoutMs = 5000) {
++  const start = Date.now();
++  let attempts = 0;
++  while (Date.now() - start < timeoutMs) {
++    attempts++;
++    const resolved = findElementFromAction(action);
++    if (resolved.element) {
++      if (attempts > 1) {
++        verboseLog(`Elemento trovato dopo ${attempts} tentativi`);
++      }
++      return resolved;
++    }
++    await sleep(150);
++  }
++  verboseLog(`Timeout risoluzione elemento dopo ${attempts} tentativi`, action.selector);
++  return { element: null, strategy: 'none' };
++}
++
++function findElementFromAction(action) {
++  if (!action) return { element: null, strategy: 'invalid-action' };
++
++  // 1) Original deep selector (best when still valid).
++  let element = findBestBySelector(action.selector, action);
++  if (element) return { element, strategy: 'deep-selector' };
++
++  const hints = action.elementHints || {};
++
++  // 2) Direct ID from hints.
++  if (hints.id) {
++    element = document.getElementById(hints.id);
++    if (element) return { element, strategy: 'hint-id' };
++  }
++
++  // 3) ID extracted from selector, for backward compatibility.
++  if (action.selector && action.selector.includes('#')) {
++    const idMatch = action.selector.match(/#([^\s>:]+)/);
++    if (idMatch && idMatch[1]) {
++      try {
++        const id = idMatch[1].replace(/\\/g, '');
++        element = document.getElementById(id);
++        if (element) return { element, strategy: 'selector-id' };
++      } catch (e) {
++        console.warn('Fallback ID lookup failed:', e);
++      }
++    }
++  }
++
++  // 3b) Dynamic ID fallback (common in SAP/UI5-like apps where numeric prefixes change).
++  const selectorId = extractIdFromSelector(action.selector);
++  if (selectorId) {
++    const dynamicIdMatch = findByDynamicIdPattern(selectorId, action);
++    if (dynamicIdMatch.element) return dynamicIdMatch;
++  }
++
++  // 4) Explicit test attributes.
++  if (hints.testId) {
++    const attrs = ['data-testid', 'data-test', 'data-qa', 'data-cy'];
++    for (const attr of attrs) {
++      const byAttr = document.querySelector(`[${attr}="${CSS.escape(hints.testId)}"]`);
++      if (byAttr) return { element: byAttr, strategy: `test-attr:${attr}` };
++    }
++  }
++
++  // 5) Name + tag (common in forms).
++  if (hints.name) {
++    const tag = hints.tag || (action.tagName || '').toLowerCase() || '*';
++    const byName = document.querySelector(`${tag}[name="${CSS.escape(hints.name)}"]`);
++    if (byName) return { element: byName, strategy: 'tag+name' };
++  }
++
++  // 6) Accessibility and semantic hints.
++  const hintedMatch = findByHintedAttributes(hints, action);
++  if (hintedMatch.element) return hintedMatch;
++
++  // 6b) Backward-compatible recovery for old recordings without elementHints.
++  const selectorHints = extractSelectorHints(action.selector);
++  const legacyMatch = findByLegacySelectorHints(selectorHints, action);
++  if (legacyMatch.element) return legacyMatch;
++
++  // 7) Text fallback for clickable controls.
++  if (action.text && action.text.trim()) {
++    const textMatched = findByActionText(action, document.querySelectorAll(action.tagName || 'button, a, label, span'));
++    if (textMatched) return { element: textMatched, strategy: 'text-fallback' };
++
++    const broadTextMatched = findByActionText(action, getBroadClickableCandidates());
++    if (broadTextMatched) return { element: broadTextMatched, strategy: 'text-broad-fallback' };
++  }
++
++  // 8) Scoped fallback from path selectors like "#container > ... > button"
++  const scoped = findByScopedSelectorFallback(action);
++  if (scoped.element) return scoped;
++
++  return { element: null, strategy: 'none' };
++}
++
++function findByHintedAttributes(hints, action) {
++  const candidates = getInteractableCandidates();
++  const targetTag = (hints.tag || action.tagName || '').toLowerCase();
++  const targetType = (hints.type || action.inputType || '').toLowerCase();
++
++  let filtered = candidates;
++  if (targetTag) {
++    filtered = filtered.filter((el) => el.tagName.toLowerCase() === targetTag);
++  }
++  if (targetType) {
++    filtered = filtered.filter((el) => (el.type || '').toLowerCase() === targetType);
++  }
++
++  const byLabel = firstMatch(filtered, (el) => normalizeText(getAssociatedLabelText(el)) === normalizeText(hints.label));
++  if (hints.label && byLabel) return { element: byLabel, strategy: 'label' };
++
++  const byAria = firstMatch(filtered, (el) => normalizeText(el.getAttribute('aria-label') || '') === normalizeText(hints.ariaLabel));
++  if (hints.ariaLabel && byAria) return { element: byAria, strategy: 'aria-label' };
++
++  const byPlaceholder = firstMatch(filtered, (el) => normalizeText(el.getAttribute('placeholder') || '') === normalizeText(hints.placeholder));
++  if (hints.placeholder && byPlaceholder) return { element: byPlaceholder, strategy: 'placeholder' };
++
++  const byRoleAndText = firstMatch(filtered, (el) => {
++    const role = (el.getAttribute('role') || '').toLowerCase();
++    const text = normalizeText(el.textContent || '');
++    return hints.role && role === hints.role.toLowerCase() && hints.text && text === normalizeText(hints.text);
++  });
++  if (byRoleAndText) return { element: byRoleAndText, strategy: 'role+text' };
++
++  const byTextOnly = firstMatch(filtered, (el) => normalizeText(el.textContent || '') === normalizeText(hints.text));
++  if (hints.text && byTextOnly) return { element: getBestClickableTarget(byTextOnly), strategy: 'hint-text' };
++
++  const byTextContains = firstMatch(filtered, (el) => {
++    const cand = normalizeIdentifier(el.textContent || '');
++    const target = normalizeIdentifier(hints.text || '');
++    return target && cand && (cand.includes(target) || target.includes(cand));
++  });
++  if (hints.text && byTextContains) return { element: getBestClickableTarget(byTextContains), strategy: 'hint-text-contains' };
++
++  return { element: null, strategy: 'none' };
++}
++
++function firstMatch(items, predicate) {
++  for (const item of items) {
++    if (predicate(item)) return item;
++  }
++  return null;
++}
++
++function getInteractableCandidates() {
++  return Array.from(document.querySelectorAll([
++    'input',
++    'textarea',
++    'select',
++    'button',
++    'a',
++    '[role="button"]',
++    '[role="link"]',
++    '[contenteditable="true"]'
++  ].join(', ')));
++}
++
++function getBroadClickableCandidates() {
++  return Array.from(document.querySelectorAll([
++    'button',
++    'a',
++    '[role="button"]',
++    '[role="link"]',
++    '[onclick]',
++    '[tabindex]',
++    'span',
++    'div'
++  ].join(', ')));
++}
++
++function extractSelectorHints(selector) {
++  if (!selector || typeof selector !== 'string') return null;
++  const leaf = selector.split(' >>> ').pop().trim();
++  if (!leaf) return null;
++
++  const hints = {
++    tag: '',
++    id: '',
++    classes: [],
++    attrs: {}
++  };
++
++  const tagMatch = leaf.match(/^[a-zA-Z][\w-]*/);
++  if (tagMatch) {
++    hints.tag = tagMatch[0].toLowerCase();
++  }
++
++  const idMatch = leaf.match(/#([^\s.[\]>:+~]+)/);
++  if (idMatch && idMatch[1]) {
++    hints.id = idMatch[1].replace(/\\/g, '');
++  }
++
++  const classMatches = leaf.match(/\.([^\s.[\]>:+~]+)/g) || [];
++  hints.classes = classMatches.map((value) => value.slice(1).replace(/\\/g, ''));
++
++  const attrRegex = /\[([^\]=~*^$|]+)\s*=\s*["']([^"']+)["']\]/g;
++  let attrMatch = attrRegex.exec(leaf);
++  while (attrMatch) {
++    const key = (attrMatch[1] || '').trim().toLowerCase();
++    const value = (attrMatch[2] || '').trim();
++    if (key && value) {
++      hints.attrs[key] = value;
++    }
++    attrMatch = attrRegex.exec(leaf);
++  }
++
++  if (!hints.tag && !hints.id && hints.classes.length === 0 && Object.keys(hints.attrs).length === 0) {
++    return null;
++  }
++
++  return hints;
++}
++
++function findByLegacySelectorHints(selectorHints, action) {
++  if (!selectorHints) return { element: null, strategy: 'none' };
++  if (!isLikelyFormAction(action, selectorHints)) return { element: null, strategy: 'none' };
++
++  const tag = selectorHints.tag || (action.tagName || '').toLowerCase();
++  const pool = getInteractableCandidates().filter((el) => {
++    if (!tag) return true;
++    return el.tagName.toLowerCase() === tag;
++  });
++
++  if (pool.length === 0) return { element: null, strategy: 'none' };
++
++  if (selectorHints.id) {
++    const byId = document.getElementById(selectorHints.id);
++    if (byId) return { element: byId, strategy: 'legacy-id' };
++  }
++
++  const nameAttr = selectorHints.attrs.name;
++  if (nameAttr) {
++    const exact = firstMatch(pool, (el) => (el.getAttribute('name') || '') === nameAttr);
++    if (exact) return { element: exact, strategy: 'legacy-name-exact' };
++
++    const ci = firstMatch(pool, (el) => (el.getAttribute('name') || '').toLowerCase() === nameAttr.toLowerCase());
++    if (ci) return { element: ci, strategy: 'legacy-name-ci' };
++  }
++
++  const bestScored = scoreBestLegacyCandidate(pool, selectorHints);
++  if (bestScored.element) return bestScored;
++
++  if (pool.length === 1 && isVisibleAndEnabled(pool[0])) {
++    return { element: pool[0], strategy: 'legacy-single-visible' };
++  }
++
++  return { element: null, strategy: 'none' };
++}
++
++function isLikelyFormAction(action, selectorHints) {
++  const tag = (action && action.tagName ? action.tagName.toLowerCase() : '') || (selectorHints && selectorHints.tag) || '';
++  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
++  return action && (action.type === 'input' || action.type === 'change');
++}
++
++function scoreBestLegacyCandidate(pool, selectorHints) {
++  const selectorValue = selectorHints.attrs.name || selectorHints.attrs.id || selectorHints.id || '';
++  if (!selectorValue) return { element: null, strategy: 'none' };
++
++  const target = normalizeIdentifier(selectorValue);
++  if (!target) return { element: null, strategy: 'none' };
++
++  let best = null;
++  let bestScore = 0;
++  let hasTie = false;
++
++  for (const el of pool) {
++    const candidateValues = [
++      el.getAttribute('name') || '',
++      el.id || '',
++      el.getAttribute('aria-label') || '',
++      el.getAttribute('placeholder') || '',
++      el.getAttribute('data-testid') || '',
++      el.getAttribute('data-test') || '',
++      el.getAttribute('data-qa') || '',
++      el.getAttribute('data-cy') || ''
++    ];
++
++    let score = 0;
++    for (const value of candidateValues) {
++      const current = normalizeIdentifier(value);
++      if (!current) continue;
++
++      if (current === target) {
++        score = Math.max(score, 100);
++      } else if (current.includes(target) || target.includes(current)) {
++        score = Math.max(score, 80);
++      } else {
++        const tokenMatches = countTokenMatches(target, current);
++        score = Math.max(score, tokenMatches * 20);
++      }
++    }
++
++    if (score > 0 && isVisibleAndEnabled(el)) {
++      score += 5;
++    }
++
++    if (score > bestScore) {
++      best = el;
++      bestScore = score;
++      hasTie = false;
++    } else if (score > 0 && score === bestScore) {
++      hasTie = true;
++    }
++  }
++
++  if (!best || bestScore < 40 || hasTie) {
++    return { element: null, strategy: 'none' };
++  }
++
++  return { element: best, strategy: 'legacy-fuzzy' };
++}
++
++function normalizeIdentifier(value) {
++  return (value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
++}
++
++function splitIdentifier(value) {
++  return (value || '')
++    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
++    .split(/[^a-zA-Z0-9]+/)
++    .map((item) => item.toLowerCase())
++    .filter((item) => item.length >= 3);
++}
++
++function countTokenMatches(target, candidate) {
++  const tokens = splitIdentifier(target);
++  if (tokens.length === 0) return 0;
++  let count = 0;
++  for (const token of tokens) {
++    if (candidate.includes(token)) count++;
++  }
++  return count;
++}
++
++function isVisibleAndEnabled(element) {
++  if (!element) return false;
++  if (element.disabled) return false;
++  const style = window.getComputedStyle(element);
++  if (!style) return true;
++  if (style.display === 'none' || style.visibility === 'hidden') return false;
++  const rect = element.getBoundingClientRect();
++  return rect.width > 0 && rect.height > 0;
++}
++
++function findBestBySelector(selector, action) {
++  const candidates = querySelectorDeepAll(selector);
++  if (!candidates || candidates.length === 0) return null;
++  if (candidates.length === 1) return candidates[0];
++
++  // Prefer text-matching candidate when selector is generic and action has text.
++  const byText = findByActionText(action, candidates);
++  if (byText) return byText;
++
++  const visible = candidates.filter(isVisibleAndEnabled);
++  if (visible.length === 1) return visible[0];
++  if (visible.length > 1) return visible[0];
++
++  return candidates[0];
++}
++
++function querySelectorDeepAll(selector) {
++  if (!selector || typeof selector !== 'string') {
++    return [];
++  }
++
++  const parts = selector.split(' >>> ');
++  let root = document;
++
++  for (let index = 0; index < parts.length; index++) {
++    const part = parts[index];
++    if (index < parts.length - 1) {
++      let host = null;
++      try {
++        host = root.querySelector(part);
++      } catch (error) {
++        console.warn('Selector non valido durante replay:', part, error);
++        return [];
++      }
++      if (!host || !host.shadowRoot) return [];
++      root = host.shadowRoot;
++    } else {
++      try {
++        return Array.from(root.querySelectorAll(part));
++      } catch (error) {
++        console.warn('Selector non valido durante replay:', part, error);
++        return [];
++      }
++    }
++  }
++
++  return [];
++}
++
++function findByActionText(action, candidates) {
++  if (!action || !action.text) return null;
++
++  const targetText = normalizeText(action.text);
++  if (!targetText) return null;
++  const normalizedCandidates = Array.from(candidates || []);
++
++  // 1) Exact visible text match
++  for (const cand of normalizedCandidates) {
++    if (!isVisibleAndEnabled(cand)) continue;
++    if (normalizeText(cand.textContent || '') === targetText) {
++      return getBestClickableTarget(cand);
++    }
++  }
++
++  // 2) Contains tokenized match (for dynamic wrappers/extra labels)
++  const targetTokens = splitIdentifier(targetText).filter(Boolean);
++  if (targetTokens.length > 0) {
++    let best = null;
++    let bestScore = 0;
++    for (const cand of normalizedCandidates) {
++      if (!isVisibleAndEnabled(cand)) continue;
++      const candText = normalizeText(cand.textContent || '');
++      if (!candText) continue;
++      const candidateNorm = normalizeIdentifier(candText);
++      const tokenScore = targetTokens.reduce((acc, token) => acc + (candidateNorm.includes(token) ? 1 : 0), 0);
++      if (tokenScore > bestScore) {
++        bestScore = tokenScore;
++        best = cand;
++      }
++    }
++    if (best && bestScore > 0) {
++      return getBestClickableTarget(best);
++    }
++  }
++
++  return null;
++}
++
++function findByScopedSelectorFallback(action) {
++  if (!action || !action.selector || typeof action.selector !== 'string') {
++    return { element: null, strategy: 'none' };
++  }
++
++  // Pattern: #container > ... > button
++  const idMatch = action.selector.match(/^#([^\s>:+~.[\]]+)/);
++  if (!idMatch || !idMatch[1]) return { element: null, strategy: 'none' };
++
++  const containerId = idMatch[1].replace(/\\/g, '');
++  const container = document.getElementById(containerId);
++  if (!container) return { element: null, strategy: 'none' };
++
++  const tagName = (action.tagName || '').toLowerCase();
++  const scopedCandidates = tagName
++    ? Array.from(container.querySelectorAll(tagName))
++    : getBroadClickableCandidates().filter((el) => container.contains(el));
++
++  if (scopedCandidates.length === 0) return { element: null, strategy: 'none' };
++
++  const byText = findByActionText(action, scopedCandidates);
++  if (byText) return { element: byText, strategy: 'scoped-text' };
++
++  const visible = scopedCandidates.filter(isVisibleAndEnabled);
++  if (visible.length > 0) return { element: getBestClickableTarget(visible[0]), strategy: 'scoped-visible' };
++
++  return { element: getBestClickableTarget(scopedCandidates[0]), strategy: 'scoped-first' };
++}
++
++function getBestClickableTarget(element) {
++  if (!element) return null;
++  if (isNaturallyClickable(element)) return element;
++
++  const clickableAncestor = element.closest('a, button, [role="button"], [role="link"], [onclick], [tabindex]');
++  if (clickableAncestor) return clickableAncestor;
++
++  return element;
++}
++
++function isNaturallyClickable(element) {
++  const tag = (element.tagName || '').toLowerCase();
++  if (tag === 'a' || tag === 'button') return true;
++  const role = (element.getAttribute('role') || '').toLowerCase();
++  if (role === 'button' || role === 'link') return true;
++  if (element.hasAttribute('onclick')) return true;
++  return false;
++}
++
++function extractIdFromSelector(selector) {
++  if (!selector || typeof selector !== 'string') return '';
++  const trimmed = selector.trim();
++  const fullId = trimmed.match(/^#([^\s>:+~.[\]]+)$/);
++  if (fullId && fullId[1]) return fullId[1].replace(/\\/g, '');
++  const idMatch = trimmed.match(/#([^\s>:+~.[\]]+)/);
++  return idMatch && idMatch[1] ? idMatch[1].replace(/\\/g, '') : '';
++}
++
++function findByDynamicIdPattern(id, action) {
++  if (!id) return { element: null, strategy: 'none' };
++
++  // SAP/UI5 wrapper for text inside button labels.
++  if (id.endsWith('-BDI-content') && action && action.text) {
++    const byBdiText = findByActionText(action, document.querySelectorAll('[id$="-BDI-content"]'));
++    if (byBdiText) return { element: byBdiText, strategy: 'dynamic-bdi-text' };
++  }
++
++  // __xmlview0--something -> __xmlviewN--something
++  const viewSuffix = id.match(/^__xmlview\d+--(.+)$/);
++  if (viewSuffix && viewSuffix[1]) {
++    const candidates = Array.from(document.querySelectorAll('[id^="__xmlview"][id*="--"]'))
++      .filter((el) => typeof el.id === 'string' && el.id.endsWith(`--${viewSuffix[1]}`));
++    const best = pickBestElementFromCandidates(candidates, action);
++    if (best) return { element: best, strategy: 'dynamic-xmlview-suffix' };
++  }
++
++  // Generic numeric-ID shift fallback: __button25-BDI-content -> __button13-BDI-content, etc.
++  if (/\d/.test(id)) {
++    const regex = new RegExp(`^${escapeRegex(id).replace(/\\d+/g, '\\\\d+')}$`);
++    const candidates = Array.from(document.querySelectorAll('[id]')).filter((el) => regex.test(el.id));
++    const best = pickBestElementFromCandidates(candidates, action);
++    if (best) return { element: best, strategy: 'dynamic-id-regex' };
++  }
++
++  return { element: null, strategy: 'none' };
++}
++
++function pickBestElementFromCandidates(candidates, action) {
++  if (!candidates || candidates.length === 0) return null;
++  if (candidates.length === 1) return getBestClickableTarget(candidates[0]);
++
++  const byText = findByActionText(action, candidates);
++  if (byText) return byText;
++
++  const visible = candidates.filter(isVisibleAndEnabled);
++  if (visible.length === 1) return getBestClickableTarget(visible[0]);
++  if (visible.length > 1) return getBestClickableTarget(visible[0]);
++
++  return getBestClickableTarget(candidates[0]);
++}
++
++function escapeRegex(value) {
++  return (value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++}
++
++function isSkippableMissingPointerdown(action) {
++  if (!action || action.type !== 'pointerdown') return false;
++  const text = normalizeText(action.text || '');
++  const tag = (action.tagName || '').toLowerCase();
++  if (text) return false;
++  if (tag !== 'div' && tag !== 'span') return false;
++  if (!action.selector) return true;
++  return /-CbBg$/.test(action.selector) || /-content$/.test(action.selector) === false;
++}
++
++function normalizeActionsForReplay(actions) {
++  const inputLikeTags = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
++  const normalized = [];
++
++  for (let index = 0; index < actions.length; index++) {
++    const action = actions[index];
++    if (!action || !action.type) continue;
++
++    // Pointerdown on fields is usually noise; input/change actions handle value reliably.
++    if (action.type === 'pointerdown' && inputLikeTags.has((action.tagName || '').toUpperCase())) {
++      continue;
++    }
++
++    // Collapse consecutive input actions on same selector to the latest value.
++    if (action.type === 'input') {
++      let last = action;
++      let cursor = index + 1;
++      while (cursor < actions.length) {
++        const next = actions[cursor];
++        if (!next || next.type !== 'input' || next.selector !== action.selector) {
++          break;
++        }
++        last = next;
++        cursor += 1;
++      }
++      normalized.push(last);
++      index = cursor - 1;
++      continue;
++    }
++
++    normalized.push(action);
++  }
++
++  return normalized;
++}
++
++function shouldTriggerClickForKeydown(element, action) {
++  if (!action || (action.key !== 'Enter' && action.key !== ' ')) {
++    return false;
++  }
++
++  const tag = (element.tagName || '').toLowerCase();
++  if (tag === 'input' || tag === 'textarea' || tag === 'select') {
++    return false;
++  }
++
++  if (element.isContentEditable) {
++    return false;
++  }
++
++  return isNaturallyClickable(element) || Boolean(element.closest('a, button, [role="button"], [role="link"]'));
++}
++
++function initActivityTracker() {
++  if (activityTracker.initialized) return;
++  activityTracker.initialized = true;
++  activityTracker.lastMutationTs = Date.now();
++
++  try {
++    const observer = new MutationObserver(() => {
++      activityTracker.mutationCount += 1;
++      activityTracker.lastMutationTs = Date.now();
++    });
++    observer.observe(document.documentElement || document, {
++      childList: true,
++      subtree: true,
++      attributes: true,
++      characterData: false
++    });
++  } catch (error) {
++    console.warn('MutationObserver non disponibile:', error);
++  }
++
++  patchFetchTracker();
++  patchXhrTracker();
++}
++
++function patchFetchTracker() {
++  if (activityTracker.patchedFetch) return;
++  if (typeof window.fetch !== 'function') return;
++
++  try {
++    const originalFetch = window.fetch.bind(window);
++    window.fetch = function(...args) {
++      activityTracker.inFlightRequests += 1;
++      const finalize = () => {
++        activityTracker.inFlightRequests = Math.max(0, activityTracker.inFlightRequests - 1);
++      };
++      try {
++        const result = originalFetch(...args);
++        Promise.resolve(result).finally(finalize);
++        return result;
++      } catch (error) {
++        finalize();
++        throw error;
++      }
++    };
++    activityTracker.patchedFetch = true;
++  } catch (error) {
++    console.warn('Patch fetch fallito:', error);
++  }
++}
++
++function patchXhrTracker() {
++  if (activityTracker.patchedXhr) return;
++  if (typeof XMLHttpRequest === 'undefined') return;
++
++  try {
++    const originalSend = XMLHttpRequest.prototype.send;
++    XMLHttpRequest.prototype.send = function(...args) {
++      activityTracker.inFlightRequests += 1;
++      const finalize = () => {
++        activityTracker.inFlightRequests = Math.max(0, activityTracker.inFlightRequests - 1);
++      };
++      this.addEventListener('loadend', finalize, { once: true });
++      try {
++        return originalSend.apply(this, args);
++      } catch (error) {
++        finalize();
++        throw error;
++      }
++    };
++    activityTracker.patchedXhr = true;
++  } catch (error) {
++    console.warn('Patch XHR fallito:', error);
++  }
++}
++
++function normalizeTimeoutMs(value) {
++  const parsed = Number(value);
++  if (!Number.isFinite(parsed)) return 8000;
++  return Math.min(30000, Math.max(1000, Math.round(parsed)));
++}
++
++function capturePageState() {
++  return {
++    url: location.href,
++    mutationCount: activityTracker.mutationCount,
++    inFlight: activityTracker.inFlightRequests
++  };
++}
++
++function hasBusyIndicators() {
++  const busySelectors = [
++    '[aria-busy="true"]',
++    '[role="progressbar"]',
++    '[data-loading="true"]',
++    '[data-testid*="spinner"]',
++    '.loading',
++    '.loader',
++    '.spinner',
++    '.skeleton'
++  ];
++
++  for (const selector of busySelectors) {
++    const element = document.querySelector(selector);
++    if (element && isVisibleAndEnabled(element)) {
++      return true;
++    }
++  }
++
++  return false;
++}
++
++async function waitForAppReady(timeoutMs, phase) {
++  const deadline = Date.now() + timeoutMs;
++  const stableWindowMs = 350;
++  let stableSince = 0;
++
++  while (Date.now() < deadline) {
++    const now = Date.now();
++    const domIsQuiet = now - activityTracker.lastMutationTs >= stableWindowMs;
++    const networkIdle = activityTracker.inFlightRequests === 0;
++    const readyStateOk = document.readyState !== 'loading';
++    const noBusyUi = !hasBusyIndicators();
++    const stable = domIsQuiet && networkIdle && readyStateOk && noBusyUi;
++
++    if (stable) {
++      if (!stableSince) stableSince = now;
++      if (now - stableSince >= stableWindowMs) {
++        verboseLog(`Smart wait ok (${phase})`, {
++          inFlightRequests: activityTracker.inFlightRequests,
++          domMutationCount: activityTracker.mutationCount
++        });
++        return true;
++      }
++    } else {
++      stableSince = 0;
++    }
++
++    await sleep(120);
++  }
++
++  verboseLog(`Smart wait timeout (${phase})`, {
++    inFlightRequests: activityTracker.inFlightRequests,
++    domMutationCount: activityTracker.mutationCount,
++    hasBusyIndicators: hasBusyIndicators()
++  });
++  return false;
++}
++
++async function waitAfterAction(action, before, timeoutMs) {
++  if (!actionCanTriggerTransition(action)) {
++    await waitForAppReady(Math.min(1800, timeoutMs), 'after-action-short');
++    return;
++  }
++
++  const transitionDeadline = Date.now() + Math.max(1200, Math.floor(timeoutMs * 0.45));
++  let transitionDetected = false;
++
++  while (Date.now() < transitionDeadline) {
++    if (location.href !== before.url) {
++      transitionDetected = true;
++      verboseLog('Transizione rilevata: URL cambiato', { from: before.url, to: location.href });
++      break;
++    }
++
++    if (activityTracker.inFlightRequests > before.inFlight || activityTracker.mutationCount > before.mutationCount) {
++      transitionDetected = true;
++      verboseLog('Transizione rilevata: DOM/network activity');
++      break;
++    }
++
++    if (hasBusyIndicators()) {
++      transitionDetected = true;
++      verboseLog('Transizione rilevata: loading indicator');
++      break;
++    }
++
++    await sleep(100);
++  }
++
++  const remaining = Math.max(1000, timeoutMs - 1000);
++  await waitForAppReady(remaining, transitionDetected ? 'after-action-transition' : 'after-action-no-transition');
++}
++
++function actionCanTriggerTransition(action) {
++  if (!action || !action.type) return false;
++  if (action.type === 'click' || action.type === 'pointerdown' || action.type === 'submit') return true;
++  if (action.type === 'keydown' && (action.key === 'Enter' || action.key === ' ')) return true;
++  return false;
+ }
+ 
+ function querySelectorDeep(selector) {
++  if (!selector || typeof selector !== 'string') {
++    return null;
++  }
++
+   const parts = selector.split(' >>> ');
+   let root = document;
+   let element = null;
+   
+   for (let index = 0; index < parts.length; index++) {
+-    element = root.querySelector(parts[index]);
++    try {
++      element = root.querySelector(parts[index]);
++    } catch (error) {
++      console.warn('Selector non valido durante replay:', parts[index], error);
++      return null;
++    }
+     if (!element) {
+       return null;
+     }
+@@ -441,3 +1407,13 @@ function highlightElement(element) {
+     element.style.outline = originalOutline;
+   }, 500);
+ }
++
++function verboseLog(message, payload) {
++  if (!playbackOptions.verboseLogs) return;
++
++  if (typeof payload === 'undefined') {
++    console.log(`[Automation][verbose] ${message}`);
++  } else {
++    console.log(`[Automation][verbose] ${message}`, payload);
++  }
++}
+diff --git a/manifest.json b/manifest.json
+index f9b0cf8..11933ce 100644
+--- a/manifest.json
++++ b/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Web Automation Recorder",
+-  "version": "1.1",
++  "version": "1.2",
+   "description": "Registra e riproduci automazioni su pagine web",
+   "permissions": [
+     "storage",
+diff --git a/popup.html b/popup.html
+index b6f6407..af5eb51 100644
+--- a/popup.html
++++ b/popup.html
+@@ -36,6 +36,24 @@
+       </button>
+     </div>
+ 
++    <div class="settings-row">
++      <label class="toggle-label" for="verboseLogsToggle">
++        <input type="checkbox" id="verboseLogsToggle">
++        <span>Verbose logs</span>
++      </label>
++    </div>
++    <div class="settings-row settings-row-inline">
++      <label class="toggle-label" for="smartWaitToggle">
++        <input type="checkbox" id="smartWaitToggle">
++        <span>Smart wait</span>
++      </label>
++      <label class="timeout-label" for="actionTimeoutMs">
++        Timeout
++        <input type="number" id="actionTimeoutMs" min="1000" max="30000" step="500" value="8000">
++        ms
++      </label>
++    </div>
++
+     <!-- Salvataggio automazione -->
+     <div id="saveSection" class="save-section" style="display: none;">
+       <input type="text" id="automationName" placeholder="Nome automazione (es. Compilazione form ordini)">
+diff --git a/popup.js b/popup.js
+index 87b0219..8121db5 100644
+--- a/popup.js
++++ b/popup.js
+@@ -1,6 +1,9 @@
+ let isRecording = false;
+ let recordedActions = [];
+ let currentTab = null;
++let verboseLogsEnabled = false;
++let smartWaitEnabled = true;
++let actionTimeoutMs = 8000;
+ 
+ // Elementi DOM
+ const recordBtn = document.getElementById('recordBtn');
+@@ -17,6 +20,9 @@ const buildVersion = document.getElementById('buildVersion');
+ const stateLabel = document.getElementById('stateLabel');
+ const automationCount = document.getElementById('automationCount');
+ const container = document.querySelector('.container');
++const verboseLogsToggle = document.getElementById('verboseLogsToggle');
++const smartWaitToggle = document.getElementById('smartWaitToggle');
++const actionTimeoutInput = document.getElementById('actionTimeoutMs');
+ 
+ const STATE_LABELS = {
+   idle: 'Idle',
+@@ -26,14 +32,18 @@ const STATE_LABELS = {
+   error: 'Errore'
+ };
+ 
+-// Inizializzazione
+-chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
++// Inizializzazione rapida
++const manifest = chrome.runtime.getManifest();
++if (buildVersion && manifest && manifest.version) {
++  buildVersion.textContent = `v${manifest.version}`;
++}
++
++// Inizializzazione dati
++chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+   currentTab = tabs[0];
++  if (!currentTab) return;
++  
+   currentUrl.textContent = currentTab.url;
+-  const manifest = chrome.runtime.getManifest();
+-  if (buildVersion && manifest && manifest.version) {
+-    buildVersion.textContent = `v${manifest.version}`;
+-  }
+   
+   // Recupera lo stato della registrazione dal background
+   chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {
+@@ -54,6 +64,8 @@ chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+   });
+   
+   loadAutomations();
++  loadPreferences();
++  loadContentBuildInfo();
+ });
+ 
+ // Event listeners
+@@ -62,6 +74,15 @@ stopBtn.addEventListener('click', stopRecording);
+ playBtn.addEventListener('click', playLastRecording);
+ saveBtn.addEventListener('click', saveAutomation);
+ cancelBtn.addEventListener('click', cancelSave);
++if (verboseLogsToggle) {
++  verboseLogsToggle.addEventListener('change', handleVerboseLogsToggle);
++}
++if (smartWaitToggle) {
++  smartWaitToggle.addEventListener('change', handleSmartWaitToggle);
++}
++if (actionTimeoutInput) {
++  actionTimeoutInput.addEventListener('change', handleActionTimeoutChange);
++}
+ 
+ // Inizia registrazione
+ async function startRecording() {
+@@ -85,7 +106,16 @@ async function startRecording() {
+   setUiState('recording');
+   
+   // Invia messaggio al content script per iniziare la registrazione
+-  chrome.tabs.sendMessage(currentTab.id, { action: 'startRecording' });
++  chrome.tabs.sendMessage(currentTab.id, { action: 'startRecording' }, () => {
++    if (chrome.runtime.lastError) {
++      showStatus('Impossibile avviare la registrazione su questa pagina', 'error');
++      isRecording = false;
++      recordBtn.disabled = false;
++      recordBtn.classList.remove('recording');
++      stopBtn.disabled = true;
++      setUiState('error');
++    }
++  });
+   
+   showStatus('🔴 Registrazione in corso...', 'info');
+ }
+@@ -93,37 +123,42 @@ async function startRecording() {
+ // Ferma registrazione
+ function stopRecording() {
+   isRecording = false;
+-  
+-  // Recupera le azioni dal background
+-  chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {
+-    recordedActions = state.actions || [];
+-    
+-    // Resetta lo stato nel background
+-    chrome.runtime.sendMessage({
+-      action: 'setRecordingState',
+-      state: {
+-        isRecording: false,
+-        tabId: null,
+-        actions: []
+-      }
+-    });
+-    
+-    recordBtn.disabled = false;
+-    recordBtn.classList.remove('recording');
+-    stopBtn.disabled = true;
+-    
+-    // Invia messaggio al content script per fermare la registrazione
+-    chrome.tabs.sendMessage(currentTab.id, { action: 'stopRecording' });
+-    
+-    if (recordedActions.length > 0) {
+-      playBtn.disabled = false;
+-      saveSection.style.display = 'block';
+-      setUiState('saved');
+-      showStatus(`✓ Registrate ${recordedActions.length} azioni`, 'success');
+-    } else {
+-      setUiState('idle');
+-      showStatus('Nessuna azione registrata', 'error');
+-    }
++
++  // Prima ferma il content script (che fa anche flush degli input in debounce).
++  chrome.tabs.sendMessage(currentTab.id, { action: 'stopRecording' }, () => {
++    // Ignora eventuali lastError: in quel caso salviamo comunque stato UI.
++
++    // Attendi un attimo per permettere al background di ricevere le ultime azioni.
++    setTimeout(() => {
++      // Recupera le azioni dal background
++      chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {
++        recordedActions = state.actions || [];
++
++        // Ora resetta lo stato nel background
++        chrome.runtime.sendMessage({
++          action: 'setRecordingState',
++          state: {
++            isRecording: false,
++            tabId: null,
++            actions: []
++          }
++        });
++
++        recordBtn.disabled = false;
++        recordBtn.classList.remove('recording');
++        stopBtn.disabled = true;
++
++        if (recordedActions.length > 0) {
++          playBtn.disabled = false;
++          saveSection.style.display = 'block';
++          setUiState('saved');
++          showStatus(`✓ Registrate ${recordedActions.length} azioni`, 'success');
++        } else {
++          setUiState('idle');
++          showStatus('Nessuna azione registrata', 'error');
++        }
++      });
++    }, 650);
+   });
+ }
+ 
+@@ -140,7 +175,12 @@ async function playLastRecording() {
+   
+   chrome.tabs.sendMessage(currentTab.id, {
+     action: 'playRecording',
+-    actions: recordedActions
++    actions: recordedActions,
++    options: {
++      verboseLogs: verboseLogsEnabled,
++      smartWait: smartWaitEnabled,
++      actionTimeoutMs
++    }
+   }, (response) => {
+     playBtn.disabled = false;
+     if (response && response.success) {
+@@ -268,7 +308,12 @@ async function runAutomation(automation) {
+   
+   chrome.tabs.sendMessage(currentTab.id, {
+     action: 'playRecording',
+-    actions: automation.actions
++    actions: automation.actions,
++    options: {
++      verboseLogs: verboseLogsEnabled,
++      smartWait: smartWaitEnabled,
++      actionTimeoutMs
++    }
+   }, (response) => {
+     if (response && response.success) {
+       setUiState('idle');
+@@ -280,6 +325,48 @@ async function runAutomation(automation) {
+   });
+ }
+ 
++function loadPreferences() {
++  chrome.storage.local.get(['verboseLogsEnabled', 'smartWaitEnabled', 'actionTimeoutMs'], (result) => {
++    verboseLogsEnabled = Boolean(result.verboseLogsEnabled);
++    smartWaitEnabled = result.smartWaitEnabled !== false;
++    actionTimeoutMs = clampTimeoutMs(result.actionTimeoutMs);
++
++    if (verboseLogsToggle) {
++      verboseLogsToggle.checked = verboseLogsEnabled;
++    }
++    if (smartWaitToggle) {
++      smartWaitToggle.checked = smartWaitEnabled;
++    }
++    if (actionTimeoutInput) {
++      actionTimeoutInput.value = String(actionTimeoutMs);
++    }
++  });
++}
++
++function handleVerboseLogsToggle(event) {
++  verboseLogsEnabled = Boolean(event.target.checked);
++  chrome.storage.local.set({ verboseLogsEnabled });
++}
++
++function handleSmartWaitToggle(event) {
++  smartWaitEnabled = Boolean(event.target.checked);
++  chrome.storage.local.set({ smartWaitEnabled });
++}
++
++function handleActionTimeoutChange(event) {
++  actionTimeoutMs = clampTimeoutMs(event.target.value);
++  if (actionTimeoutInput) {
++    actionTimeoutInput.value = String(actionTimeoutMs);
++  }
++  chrome.storage.local.set({ actionTimeoutMs });
++}
++
++function clampTimeoutMs(value) {
++  const parsed = Number(value);
++  if (!Number.isFinite(parsed)) return 8000;
++  return Math.min(30000, Math.max(1000, Math.round(parsed)));
++}
++
+ // Elimina automazione
+ function deleteAutomation(id) {
+   if (!confirm('Vuoi eliminare questa automazione?')) {
+@@ -322,3 +409,26 @@ function setUiState(state) {
+     stateLabel.textContent = STATE_LABELS[state];
+   }
+ }
++
++function loadContentBuildInfo() {
++  if (!currentTab || !buildVersion) return;
++
++  const manifest = chrome.runtime.getManifest();
++  const extVersion = manifest && manifest.version ? `v${manifest.version}` : '';
++  buildVersion.textContent = `${extVersion} • c:n/a`;
++
++  chrome.tabs.sendMessage(currentTab.id, { action: 'getBuildInfo' }, (response) => {
++    if (chrome.runtime.lastError) {
++      buildVersion.title = `Content build non disponibile: ${chrome.runtime.lastError.message}`;
++      return;
++    }
++
++    if (!response || !response.build) {
++      buildVersion.title = 'Content build non disponibile su questa pagina';
++      return;
++    }
++
++    buildVersion.textContent = `${extVersion} • c:${response.build}`;
++    buildVersion.title = `topFrame=${response.topFrame} | ${response.href}`;
++  });
++}
+diff --git a/styles.css b/styles.css
+index 84516e8..47d702b 100644
+--- a/styles.css
++++ b/styles.css
+@@ -94,6 +94,50 @@ h2 {
+   margin-bottom: 16px;
+ }
+ 
++.settings-row {
++  margin-bottom: 14px;
++}
++
++.settings-row-inline {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 8px;
++}
++
++.toggle-label {
++  display: inline-flex;
++  align-items: center;
++  gap: 8px;
++  font-size: 12px;
++  color: #a0a4ae;
++  cursor: pointer;
++}
++
++.toggle-label input[type="checkbox"] {
++  width: 14px;
++  height: 14px;
++  accent-color: #5ac8fa;
++}
++
++.timeout-label {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  font-size: 12px;
++  color: #a0a4ae;
++}
++
++#actionTimeoutMs {
++  width: 72px;
++  padding: 3px 6px;
++  border: 1px solid #232735;
++  border-radius: 6px;
++  font-size: 12px;
++  background: #0f1115;
++  color: #ffffff;
++}
++
+ .btn {
+   border: none;
+   border-radius: 8px;
+@@ -249,6 +293,7 @@ h2 {
+   margin-bottom: 8px;
+   border-radius: 8px;
+   display: flex;
++  flex-direction: row-reverse; /* Put actions on the left */
+   justify-content: space-between;
+   align-items: center;
+   border: 1px solid #232735;
+@@ -256,6 +301,8 @@ h2 {
+ 
+ .automation-info {
+   flex: 1;
++  min-width: 0; /* Allow text to truncate */
++  margin-left: 8px;
+ }
+ 
+ .automation-name {

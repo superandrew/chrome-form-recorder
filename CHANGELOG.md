@@ -16,6 +16,28 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/spec/v2.0
 
 ---
 
+## [1.2.0] - 2026-02-12
+
+### Added
+- 🧠 Modalità `Smart wait` con timeout configurabile da popup
+- 🔎 Toggle `Verbose logs` per diagnostica replay
+- 🏷️ Build visibility nel popup (`vX.Y • c:BUILD`) e endpoint `getBuildInfo`
+- 🧩 Fallback replay avanzati per SPA/UI dinamiche (test-id, label, aria, placeholder, testo)
+- 🛡️ Guard top-frame per prevenire replay duplicati in contesti multi-frame
+
+### Changed
+- Algoritmo replay con normalizzazione azioni (riduzione eventi rumorosi)
+- Matching elementi con strategie progressive e fallback contestuali
+- Miglioramenti compatibilità con ID dinamici (es. pattern UI5)
+
+### Fixed
+- Fix race condition nel salvataggio azioni in background (`addAction`)
+- Fix perdita input in debounce durante `STOP` (flush input pending)
+- Fix stop flow popup: finalizzazione più robusta prima di reset stato
+- Fix keydown su campi testuali che poteva generare click non desiderati
+
+---
+
 ## [1.0.0] - 2026-02-09
 
 ### Added
@@ -67,5 +89,6 @@ e questo progetto aderisce al [Semantic Versioning](https://semver.org/spec/v2.0
 
 ---
 
-[Unreleased]: https://github.com/TUO-USERNAME/chrome-automation-recorder/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/TUO-USERNAME/chrome-automation-recorder/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/TUO-USERNAME/chrome-automation-recorder/releases/tag/v1.2.0
 [1.0.0]: https://github.com/TUO-USERNAME/chrome-automation-recorder/releases/tag/v1.0.0

@@ -15,7 +15,7 @@ git init
 git add .
 
 # 4. Primo commit
-git commit -m "Initial commit: Chrome Automation Recorder v1.0"
+git commit -m "Initial commit: Chrome Automation Recorder v1.2"
 
 # 5. Crea il repository su GitHub (vai su github.com)
 # Poi esegui (sostituisci TUO-USERNAME):
@@ -125,26 +125,32 @@ con:
 ![Recording Demo](screenshots/recording.png)
 ```
 
-## 🏷️ Creare una release v1.0
+## 🏷️ Creare una release v1.2.0
 
 1. Vai su `https://github.com/TUO-USERNAME/chrome-automation-recorder`
 2. Clicca "Releases" → "Create a new release"
-3. Tag version: `v1.0.0`
-4. Release title: `Version 1.0.0 - Initial Release`
+3. Tag version: `v1.2.0`
+4. Release title: `Version 1.2.0 - Smart Replay & Diagnostics`
 5. Description:
    ```markdown
-   ## 🎉 Prima release ufficiale di Chrome Automation Recorder!
+   ## 🚀 Release 1.2.0 di Chrome Automation Recorder
 
    ### ✨ Funzionalità
-   - Registrazione automazioni web
-   - Riproduzione con un click
-   - Gestione automazioni salvate
-   - Interfaccia intuitiva
+   - Smart wait per SPA dinamiche
+   - Verbose logs per debugging
+   - Build check `vX.Y • c:BUILD`
+   - Replay più robusto su elementi dinamici
 
    ### 📦 Installazione
    Vedi il [README](https://github.com/TUO-USERNAME/chrome-automation-recorder#readme)
    ```
 6. Clicca "Publish release"
+
+## 🧪 Verifica rapida build attiva
+
+Nel popup, controlla il testo versione:
+- Atteso: `v1.2 • c:2026-02-12.3`
+- Se vedi `c:n/a`: ricarica la tab `https://...` e riapri il popup
 
 ## ⚙️ Configurazione Git (prima volta)
 

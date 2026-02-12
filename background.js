@@ -8,10 +8,12 @@ const defaultRecordingState = {
 
 // Stato globale della registrazione (tenuto in memoria ma sincronizzato con storage.session)
 let recordingState = { ...defaultRecordingState };
+let recordingStateLoaded = false;
 
 function loadRecordingState(callback) {
   chrome.storage.session.get(['recordingState'], (result) => {
     recordingState = result.recordingState || { ...defaultRecordingState };
+    recordingStateLoaded = true;
     callback(recordingState);
   });
 }
@@ -23,6 +25,14 @@ function saveRecordingState(state, callback) {
       callback();
     }
   });
+}
+
+function ensureRecordingStateLoaded(callback) {
+  if (recordingStateLoaded) {
+    callback(recordingState);
+    return;
+  }
+  loadRecordingState(callback);
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -46,6 +56,9 @@ chrome.runtime.onStartup.addListener(() => {
   loadRecordingState(() => {});
 });
 
+// Also load once when the worker is evaluated.
+ensureRecordingStateLoaded(() => {});
+
 // Gestisci messaggi da content script e popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getAutomations') {
@@ -56,7 +69,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'getRecordingState') {
-    loadRecordingState((state) => {
+    ensureRecordingStateLoaded((state) => {
       sendResponse(state);
     });
     return true;
@@ -71,19 +84,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'addAction') {
-    loadRecordingState((state) => {
-      if (state.isRecording && sender.tab && sender.tab.id === state.tabId) {
-        const updatedState = {
-          ...state,
-          actions: [...state.actions, request.actionData]
-        };
-        saveRecordingState(updatedState, () => {
-          sendResponse({ success: true });
-        });
-      } else {
-        sendResponse({ success: false });
-      }
-    });
+    const senderTabId = sender && sender.tab ? sender.tab.id : null;
+    const canAccept = recordingState.isRecording && senderTabId !== null && senderTabId === recordingState.tabId;
+
+    if (canAccept) {
+      const updatedState = {
+        ...recordingState,
+        actions: [...recordingState.actions, request.actionData]
+      };
+      saveRecordingState(updatedState, () => {
+        sendResponse({ success: true });
+      });
+    } else {
+      sendResponse({ success: false });
+    }
     return true;
   }
   

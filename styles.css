@@ -94,6 +94,50 @@ h2 {
   margin-bottom: 16px;
 }
 
+.settings-row {
+  margin-bottom: 14px;
+}
+
+.settings-row-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #a0a4ae;
+  cursor: pointer;
+}
+
+.toggle-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #5ac8fa;
+}
+
+.timeout-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #a0a4ae;
+}
+
+#actionTimeoutMs {
+  width: 72px;
+  padding: 3px 6px;
+  border: 1px solid #232735;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #0f1115;
+  color: #ffffff;
+}
+
 .btn {
   border: none;
   border-radius: 8px;
@@ -249,6 +293,7 @@ h2 {
   margin-bottom: 8px;
   border-radius: 8px;
   display: flex;
+  flex-direction: row-reverse; /* Put actions on the left */
   justify-content: space-between;
   align-items: center;
   border: 1px solid #232735;
@@ -256,6 +301,8 @@ h2 {
 
 .automation-info {
   flex: 1;
+  min-width: 0; /* Allow text to truncate */
+  margin-left: 8px;
 }
 
 .automation-name {

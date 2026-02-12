@@ -1,6 +1,9 @@
 let isRecording = false;
 let recordedActions = [];
 let currentTab = null;
+let verboseLogsEnabled = false;
+let smartWaitEnabled = true;
+let actionTimeoutMs = 8000;
 
 // Elementi DOM
 const recordBtn = document.getElementById('recordBtn');
@@ -17,6 +20,9 @@ const buildVersion = document.getElementById('buildVersion');
 const stateLabel = document.getElementById('stateLabel');
 const automationCount = document.getElementById('automationCount');
 const container = document.querySelector('.container');
+const verboseLogsToggle = document.getElementById('verboseLogsToggle');
+const smartWaitToggle = document.getElementById('smartWaitToggle');
+const actionTimeoutInput = document.getElementById('actionTimeoutMs');
 
 const STATE_LABELS = {
   idle: 'Idle',
@@ -26,14 +32,18 @@ const STATE_LABELS = {
   error: 'Errore'
 };
 
-// Inizializzazione
-chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+// Inizializzazione rapida
+const manifest = chrome.runtime.getManifest();
+if (buildVersion && manifest && manifest.version) {
+  buildVersion.textContent = `v${manifest.version}`;
+}
+
+// Inizializzazione dati
+chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   currentTab = tabs[0];
+  if (!currentTab) return;
+  
   currentUrl.textContent = currentTab.url;
-  const manifest = chrome.runtime.getManifest();
-  if (buildVersion && manifest && manifest.version) {
-    buildVersion.textContent = `v${manifest.version}`;
-  }
   
   // Recupera lo stato della registrazione dal background
   chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {
@@ -54,6 +64,8 @@ chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
   });
   
   loadAutomations();
+  loadPreferences();
+  loadContentBuildInfo();
 });
 
 // Event listeners
@@ -62,6 +74,15 @@ stopBtn.addEventListener('click', stopRecording);
 playBtn.addEventListener('click', playLastRecording);
 saveBtn.addEventListener('click', saveAutomation);
 cancelBtn.addEventListener('click', cancelSave);
+if (verboseLogsToggle) {
+  verboseLogsToggle.addEventListener('change', handleVerboseLogsToggle);
+}
+if (smartWaitToggle) {
+  smartWaitToggle.addEventListener('change', handleSmartWaitToggle);
+}
+if (actionTimeoutInput) {
+  actionTimeoutInput.addEventListener('change', handleActionTimeoutChange);
+}
 
 // Inizia registrazione
 async function startRecording() {
@@ -85,7 +106,16 @@ async function startRecording() {
   setUiState('recording');
   
   // Invia messaggio al content script per iniziare la registrazione
-  chrome.tabs.sendMessage(currentTab.id, { action: 'startRecording' });
+  chrome.tabs.sendMessage(currentTab.id, { action: 'startRecording' }, () => {
+    if (chrome.runtime.lastError) {
+      showStatus('Impossibile avviare la registrazione su questa pagina', 'error');
+      isRecording = false;
+      recordBtn.disabled = false;
+      recordBtn.classList.remove('recording');
+      stopBtn.disabled = true;
+      setUiState('error');
+    }
+  });
   
   showStatus('🔴 Registrazione in corso...', 'info');
 }
@@ -93,37 +123,42 @@ async function startRecording() {
 // Ferma registrazione
 function stopRecording() {
   isRecording = false;
-  
-  // Recupera le azioni dal background
-  chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {
-    recordedActions = state.actions || [];
-    
-    // Resetta lo stato nel background
-    chrome.runtime.sendMessage({
-      action: 'setRecordingState',
-      state: {
-        isRecording: false,
-        tabId: null,
-        actions: []
-      }
-    });
-    
-    recordBtn.disabled = false;
-    recordBtn.classList.remove('recording');
-    stopBtn.disabled = true;
-    
-    // Invia messaggio al content script per fermare la registrazione
-    chrome.tabs.sendMessage(currentTab.id, { action: 'stopRecording' });
-    
-    if (recordedActions.length > 0) {
-      playBtn.disabled = false;
-      saveSection.style.display = 'block';
-      setUiState('saved');
-      showStatus(`✓ Registrate ${recordedActions.length} azioni`, 'success');
-    } else {
-      setUiState('idle');
-      showStatus('Nessuna azione registrata', 'error');
-    }
+
+  // Prima ferma il content script (che fa anche flush degli input in debounce).
+  chrome.tabs.sendMessage(currentTab.id, { action: 'stopRecording' }, () => {
+    // Ignora eventuali lastError: in quel caso salviamo comunque stato UI.
+
+    // Attendi un attimo per permettere al background di ricevere le ultime azioni.
+    setTimeout(() => {
+      // Recupera le azioni dal background
+      chrome.runtime.sendMessage({ action: 'getRecordingState' }, (state) => {
+        recordedActions = state.actions || [];
+
+        // Ora resetta lo stato nel background
+        chrome.runtime.sendMessage({
+          action: 'setRecordingState',
+          state: {
+            isRecording: false,
+            tabId: null,
+            actions: []
+          }
+        });
+
+        recordBtn.disabled = false;
+        recordBtn.classList.remove('recording');
+        stopBtn.disabled = true;
+
+        if (recordedActions.length > 0) {
+          playBtn.disabled = false;
+          saveSection.style.display = 'block';
+          setUiState('saved');
+          showStatus(`✓ Registrate ${recordedActions.length} azioni`, 'success');
+        } else {
+          setUiState('idle');
+          showStatus('Nessuna azione registrata', 'error');
+        }
+      });
+    }, 650);
   });
 }
 
@@ -140,7 +175,12 @@ async function playLastRecording() {
   
   chrome.tabs.sendMessage(currentTab.id, {
     action: 'playRecording',
-    actions: recordedActions
+    actions: recordedActions,
+    options: {
+      verboseLogs: verboseLogsEnabled,
+      smartWait: smartWaitEnabled,
+      actionTimeoutMs
+    }
   }, (response) => {
     playBtn.disabled = false;
     if (response && response.success) {
@@ -268,7 +308,12 @@ async function runAutomation(automation) {
   
   chrome.tabs.sendMessage(currentTab.id, {
     action: 'playRecording',
-    actions: automation.actions
+    actions: automation.actions,
+    options: {
+      verboseLogs: verboseLogsEnabled,
+      smartWait: smartWaitEnabled,
+      actionTimeoutMs
+    }
   }, (response) => {
     if (response && response.success) {
       setUiState('idle');
@@ -278,6 +323,48 @@ async function runAutomation(automation) {
       showStatus('✗ Errore durante l\'esecuzione', 'error');
     }
   });
+}
+
+function loadPreferences() {
+  chrome.storage.local.get(['verboseLogsEnabled', 'smartWaitEnabled', 'actionTimeoutMs'], (result) => {
+    verboseLogsEnabled = Boolean(result.verboseLogsEnabled);
+    smartWaitEnabled = result.smartWaitEnabled !== false;
+    actionTimeoutMs = clampTimeoutMs(result.actionTimeoutMs);
+
+    if (verboseLogsToggle) {
+      verboseLogsToggle.checked = verboseLogsEnabled;
+    }
+    if (smartWaitToggle) {
+      smartWaitToggle.checked = smartWaitEnabled;
+    }
+    if (actionTimeoutInput) {
+      actionTimeoutInput.value = String(actionTimeoutMs);
+    }
+  });
+}
+
+function handleVerboseLogsToggle(event) {
+  verboseLogsEnabled = Boolean(event.target.checked);
+  chrome.storage.local.set({ verboseLogsEnabled });
+}
+
+function handleSmartWaitToggle(event) {
+  smartWaitEnabled = Boolean(event.target.checked);
+  chrome.storage.local.set({ smartWaitEnabled });
+}
+
+function handleActionTimeoutChange(event) {
+  actionTimeoutMs = clampTimeoutMs(event.target.value);
+  if (actionTimeoutInput) {
+    actionTimeoutInput.value = String(actionTimeoutMs);
+  }
+  chrome.storage.local.set({ actionTimeoutMs });
+}
+
+function clampTimeoutMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 8000;
+  return Math.min(30000, Math.max(1000, Math.round(parsed)));
 }
 
 // Elimina automazione
@@ -321,4 +408,27 @@ function setUiState(state) {
   if (stateLabel && STATE_LABELS[state]) {
     stateLabel.textContent = STATE_LABELS[state];
   }
+}
+
+function loadContentBuildInfo() {
+  if (!currentTab || !buildVersion) return;
+
+  const manifest = chrome.runtime.getManifest();
+  const extVersion = manifest && manifest.version ? `v${manifest.version}` : '';
+  buildVersion.textContent = `${extVersion} • c:n/a`;
+
+  chrome.tabs.sendMessage(currentTab.id, { action: 'getBuildInfo' }, (response) => {
+    if (chrome.runtime.lastError) {
+      buildVersion.title = `Content build non disponibile: ${chrome.runtime.lastError.message}`;
+      return;
+    }
+
+    if (!response || !response.build) {
+      buildVersion.title = 'Content build non disponibile su questa pagina';
+      return;
+    }
+
+    buildVersion.textContent = `${extVersion} • c:${response.build}`;
+    buildVersion.title = `topFrame=${response.topFrame} | ${response.href}`;
+  });
 }

@@ -165,3 +165,19 @@ Se hai domande o dubbi:
 Tutti i contributori saranno aggiunti alla sezione "Contributors" del README.
 
 Grazie per aver contribuito! 🙏
+
+## 🧭 Note di debug (v1.2+)
+
+Quando segnali o risolvi bug su replay/recording, includi sempre:
+
+- Versione popup (es. `v1.2`)
+- Content build (es. `c:2026-02-12.3`)
+- Stato opzioni replay: `Smart wait`, `Timeout`, `Verbose logs`
+- Estratto log console con prefisso `[Automation][verbose]`
+
+### Checklist test minima per PR
+
+- [ ] Registrazione + stop salva almeno 1 azione su sito statico
+- [ ] Replay funziona su almeno 1 SPA
+- [ ] Nessun replay duplicato in pagine con iframe
+- [ ] Build visibile nel popup (`vX.Y • c:...`)

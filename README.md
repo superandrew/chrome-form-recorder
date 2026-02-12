@@ -2,7 +2,7 @@
 
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?logo=google-chrome)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-1.0-orange)
+![Version](https://img.shields.io/badge/version-1.2-orange)
 
 Estensione Chrome per registrare e riprodurre automazioni su pagine web in modo semplice e intuitivo.
 
@@ -10,6 +10,9 @@ Estensione Chrome per registrare e riprodurre automazioni su pagine web in modo 
 
 - ⏺ **Registrazione**: Cattura click, input di testo, selezioni e submit
 - ▶ **Riproduzione**: Esegui automazioni registrate con un click
+- 🧠 **Smart Wait**: Attese intelligenti per SPA lente o dinamiche
+- 🔎 **Verbose Logs**: Diagnostica dettagliata durante replay
+- 🏷️ **Build Check**: Mostra versione estensione + build content script nel popup (`vX.Y • c:BUILD`)
 - 💾 **Salvataggio**: Salva automazioni con nomi personalizzati
 - 🎯 **Specifiche per URL**: Le automazioni sono associate al sito in cui sono state create
 - 📝 **Gestione**: Visualizza, esegui ed elimina automazioni salvate
@@ -82,6 +85,10 @@ Fatto! Ora puoi iniziare a registrare le tue automazioni.
 - **Bottone REC rosso**: Inizia la registrazione (pulsa durante la registrazione)
 - **Bottone STOP**: Ferma la registrazione
 - **Bottone PLAY verde**: Esegui l'ultima automazione registrata
+- **Verbose logs**: Log dettagliati in console (`[Automation][verbose]`)
+- **Smart wait**: Attende stabilizzazione DOM/network prima/dopo le azioni
+- **Timeout (ms)**: Timeout per risoluzione elemento e attese smart
+- **Build label**: In header vedi `v1.2 • c:...` per verificare script aggiornato
 - **Lista automazioni**: Mostra solo le automazioni per il sito corrente
 
 ## ⚙️ Funzionamento tecnico
@@ -105,12 +112,23 @@ Fatto! Ora puoi iniziare a registrare le tue automazioni.
 
 ### Selettori
 
-L'estensione genera selettori CSS per identificare gli elementi, in ordine di preferenza:
+L'estensione usa una strategia a fallback multipli per identificare elementi:
 
 1. ID (`#elemento`)
 2. Name (`input[name="campo"]`)
 3. Classe unica (`.classe`)
-4. Percorso con nth-child (`div > form > input:nth-child(2)`)
+4. Percorso CSS con `nth-of-type`
+5. Hint semantici (`label`, `aria-label`, `placeholder`, `role`, `data-testid`)
+6. Match testo e fallback dinamici (utile su SPA/UI5)
+
+### Stabilità replay su SPA
+
+- Risoluzione elemento con retry fino al timeout configurato
+- Normalizzazione replay (riduce eventi rumorosi)
+- Smart wait pre/post azione con check:
+  - DOM stabile
+  - richieste in-flight (`fetch`/`xhr`) completate
+  - assenza indicatori di loading
 
 ## 🔧 Personalizzazione
 
@@ -146,9 +164,9 @@ case 'nuovoevento':
 ## ⚠️ Limitazioni
 
 - Le automazioni potrebbero non funzionare se la struttura della pagina cambia
-- Alcuni elementi dinamici (caricati dopo) potrebbero non essere trovati
+- Alcuni elementi dinamici custom possono richiedere nuova registrazione
 - I CAPTCHA e contenuti protetti non possono essere automatizzati
-- Le azioni in iframe potrebbero non essere registrate
+- Il replay viene eseguito nel top frame per evitare duplicazioni su pagine con iframe
 
 ## 🐛 Risoluzione problemi
 
@@ -156,13 +174,21 @@ case 'nuovoevento':
 
 - Verifica di essere sulla stessa pagina dove l'hai registrata
 - Controlla che la struttura della pagina non sia cambiata
-- Apri la console (F12) per vedere eventuali errori
+- Attiva **Verbose logs** e apri la console (F12)
+- Aumenta **Timeout** (es. 12000-15000ms) e lascia **Smart wait** attivo
+
+### Vedo replay duplicati o comportamenti incoerenti
+
+- Verifica build nel popup: deve mostrare `v1.2 • c:2026-02-12.3`
+- Se vedi `c:n/a`, ricarica la tab normale `https://...` (non `chrome://...`)
+- Se il build non cambia, ricarica estensione da `chrome://extensions/`
 
 ### Elementi non trovati
 
 - La pagina potrebbe aver cambiato struttura
 - Prova a registrare di nuovo l'automazione
 - Usa ID o name sugli elementi HTML per selettori più stabili
+- Seleziona azioni su elementi cliccabili reali (button/link), evitando wrapper visuali non interattivi
 
 ### La registrazione non cattura alcune azioni
 
@@ -229,7 +255,7 @@ Per problemi o domande:
 - [ ] Export/import automazioni
 - [ ] Variabili personalizzabili
 - [ ] Editor visuale delle automazioni
-- [ ] Supporto per iframe
+- [ ] Migliore supporto per iframe complessi
 - [ ] Gestione pause personalizzabili
 
 ## 👨‍💻 Autore
